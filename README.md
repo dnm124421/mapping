@@ -15,7 +15,8 @@ Most AI learning tools require expensive, complex LLM API keys and deliver gener
    - Missed tasks never cause shame; they turn into **Gentle Catch-Up** recommendations.
    - **Rest days never break your streak**.
    - A **3-day forgiveness buffer** bridges occasional life interruptions.
-5. **Zero Fake Metrics**: Streaks, velocity, study minutes, and 90-day activity heatmaps are 100% computed from real data.
+5. **YouTube Study Revision**: Direct YouTube topic search button, link pasting, and embedded video players on Today's tasks and Roadmap study dossiers.
+6. **Zero Fake Metrics**: Streaks, velocity, study minutes, and 90-day activity heatmaps are 100% computed from real data and synchronized directly to Supabase.
 
 ---
 
@@ -101,7 +102,7 @@ Create a free project at [supabase.com](https://supabase.com):
 3. Create a `.env.local` file in the root directory:
 ```env
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your-publishable-or-anon-key
 ```
 > **Note**: Even without Supabase credentials, the application includes a seamless offline/local storage fallback for every screen and feature!
 
@@ -134,7 +135,8 @@ Creates an optimized static/dynamic production bundle verified across all 14 rou
 | `/focus/[taskId]` | Deep Study Timer (tab-sleep safe, streak shield, session logger) |
 | `/history` | 90-day activity heatmap matrix, telemetry stats, and CSV export |
 | `/settings` | Profile preferences, AI engine selector, and full JSON Data Vault |
-| `/login` | Supabase Auth with Google OAuth and Email magic links |
+| `/mapping` | Live Supabase Database Explorer (inspects all 10 schema tables with RLS diagnostics) |
+| `/login` | Supabase Auth with Google OAuth, Email password & magic links |
 | `/onboarding` | 3-step first-run walkthrough introducing the Prompt-JSON loop |
 
 ---
