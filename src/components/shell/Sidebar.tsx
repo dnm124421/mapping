@@ -122,38 +122,38 @@ export function Sidebar() {
           <ThemeToggle />
         </div>
 
-        <div className="flex items-center justify-between p-2 rounded-md bg-bg border border-line">
-          <div className="flex items-center gap-2.5 min-w-0">
-            {profile?.avatar_url ? (
-              <img
-                src={profile.avatar_url}
-                alt={displayName}
-                className="w-7 h-7 rounded-full object-cover border border-line"
-              />
-            ) : (
-              <div className="w-7 h-7 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center text-primary font-semibold text-xs">
-                {initial}
+        {user ? (
+          <div className="flex items-center justify-between p-2 rounded-md bg-bg border border-line">
+            <div className="flex items-center gap-2.5 min-w-0">
+              {profile?.avatar_url ? (
+                <img
+                  src={profile.avatar_url}
+                  alt={displayName}
+                  className="w-7 h-7 rounded-full object-cover border border-line"
+                />
+              ) : (
+                <div className="w-7 h-7 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center text-primary font-semibold text-xs">
+                  {initial}
+                </div>
+              )}
+              <div className="flex flex-col min-w-0">
+                <span className="text-xs font-medium text-ink truncate" title={displayName}>
+                  {displayName}
+                </span>
+                <span className="text-[10px] text-mute truncate">
+                  {user.email}
+                </span>
               </div>
-            )}
-            <div className="flex flex-col min-w-0">
-              <span className="text-xs font-medium text-ink truncate" title={displayName}>
-                {displayName}
-              </span>
-              <span className="text-[10px] text-mute truncate">
-                {user ? user.email : "Free Account"}
-              </span>
             </div>
-          </div>
 
-          <div className="flex items-center gap-1">
-            <Link
-              href="/settings"
-              className="p-1.5 rounded-md text-mute hover:text-ink hover:bg-surface transition-colors"
-              title="Settings & Data Vault"
-            >
-              <Settings className="w-4 h-4" />
-            </Link>
-            {user && (
+            <div className="flex items-center gap-1">
+              <Link
+                href="/settings"
+                className="p-1.5 rounded-md text-mute hover:text-ink hover:bg-surface transition-colors"
+                title="Settings & Data Vault"
+              >
+                <Settings className="w-4 h-4" />
+              </Link>
               <button
                 type="button"
                 onClick={signOut}
@@ -162,9 +162,16 @@ export function Sidebar() {
               >
                 <LogOut className="w-4 h-4" />
               </button>
-            )}
+            </div>
           </div>
-        </div>
+        ) : (
+          <Link
+            href="/login"
+            className="flex items-center justify-center gap-2 w-full py-2 px-3 rounded-md bg-primary hover:bg-primary-hover text-white text-xs font-semibold shadow-sm transition-colors"
+          >
+            <span>Sign In to Supabase</span>
+          </Link>
+        )}
       </div>
     </aside>
   );

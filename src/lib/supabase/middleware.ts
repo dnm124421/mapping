@@ -74,7 +74,8 @@ export async function updateSession(request: NextRequest) {
   const isPublicAuthRoute =
     pathname === "/login" ||
     pathname === "/reset-password" ||
-    pathname.startsWith("/auth/");
+    pathname.startsWith("/auth/") ||
+    pathname === "/mapping";
 
   // If unauthenticated and trying to access a protected app route
   if (!user && !isPublicAuthRoute) {

@@ -24,11 +24,37 @@ export async function GET(request: Request) {
         // Fetch or create profile if needed
         const { data: profile } = await supabase
           .from("profiles")
-          .select("settings")
+          .select("settings, id")
           .eq("id", user.id)
-          .single();
+          .maybeSingle();
 
-        const isOnboarded = profile?.settings?.onboarded === true;
+        if (!profile) {
+          const displayName =
+            user.user_metadata?.full_name ||
+            user.user_metadata?.name ||
+            user.email?.split("@")[0] ||
+            "Learner";
+          const avatarUrl =
+            user.user_metadata?.avatar_url ||
+            user.user_metadata?.picture ||
+            null;
+
+          await supabase.from("profiles").upsert(
+            {
+              id: user.id,
+              display_name: displayName,
+              avatar_url: avatarUrl,
+              timezone: "Asia/Kolkata",
+              preferred_ai: "chatgpt",
+              settings: { onboarded: true },
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "id" }
+          );
+        }
+
+        const isOnboarded = profile ? profile?.settings?.onboarded === true : true;
 
         if (!isOnboarded) {
           return NextResponse.redirect(new URL("/onboarding", requestUrl.origin));

@@ -37,18 +37,55 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const fetchProfile = async (userId: string) => {
+  const fetchProfile = async (userId: string, currentUser?: User | null) => {
     if (!isSupabaseConfigured()) return;
     const supabase = createClient();
     try {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("profiles")
         .select("*")
         .eq("id", userId)
-        .single();
-      if (data) setProfile(data as UserProfile);
+        .maybeSingle();
+
+      if (data) {
+        setProfile(data as UserProfile);
+      } else {
+        // If profile doesn't exist in Supabase yet, create it automatically
+        const activeUser = currentUser || user;
+        const displayName =
+          activeUser?.user_metadata?.full_name ||
+          activeUser?.user_metadata?.name ||
+          activeUser?.email?.split("@")[0] ||
+          "Learner";
+        const avatarUrl =
+          activeUser?.user_metadata?.avatar_url ||
+          activeUser?.user_metadata?.picture ||
+          null;
+
+        const newProfile = {
+          id: userId,
+          display_name: displayName,
+          avatar_url: avatarUrl,
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Kolkata",
+          preferred_ai: "chatgpt",
+          settings: { onboarded: true },
+          updated_at: new Date().toISOString(),
+        };
+
+        const { data: inserted } = await supabase
+          .from("profiles")
+          .upsert(newProfile, { onConflict: "id" })
+          .select()
+          .maybeSingle();
+
+        if (inserted) {
+          setProfile(inserted as UserProfile);
+        } else {
+          setProfile(newProfile as UserProfile);
+        }
+      }
     } catch (e) {
-      console.warn("Could not fetch profile:", e);
+      console.warn("Could not fetch or create profile:", e);
     }
   };
 
@@ -64,7 +101,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     supabase.auth.getUser().then(({ data }) => {
       setUser(data.user);
       if (data.user) {
-        fetchProfile(data.user.id);
+        fetchProfile(data.user.id, data.user);
       }
       setLoading(false);
     });
@@ -75,7 +112,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } = supabase.auth.onAuthStateChange(async (event, session) => {
       setUser(session?.user || null);
       if (session?.user) {
-        await fetchProfile(session.user.id);
+        await fetchProfile(session.user.id, session.user);
       } else {
         setProfile(null);
       }

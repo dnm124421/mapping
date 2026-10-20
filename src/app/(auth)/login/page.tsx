@@ -11,6 +11,9 @@ import {
   Eye,
   EyeOff,
   CheckCircle2,
+  Mail,
+  ShieldCheck,
+  AlertTriangle,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/shell/ThemeToggle";
 import { APP_NAME } from "@/lib/constants";
@@ -23,12 +26,15 @@ function LoginForm() {
   const next = searchParams.get("next") || "/";
   const errorParam = searchParams.get("error");
 
-  const [tab, setTab] = useState<"signin" | "signup">("signin");
+  const [tab, setTab] = useState<"signin" | "signup" | "magic">("signin");
   const [showPassword, setShowPassword] = useState(false);
+  const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [signupSuccess, setSignupSuccess] = useState(false);
+  const [magicLinkSent, setMagicLinkSent] = useState(false);
+  const [oauthError, setOauthError] = useState<string | null>(null);
 
   useEffect(() => {
     if (errorParam === "auth_failed") {
@@ -45,6 +51,7 @@ function LoginForm() {
       return;
     }
 
+    setOauthError(null);
     try {
       setLoading(true);
       const supabase = createClient();
@@ -53,15 +60,64 @@ function LoginForm() {
         provider: "google",
         options: {
           redirectTo: `${origin}/auth/callback?next=${encodeURIComponent(next)}`,
+          queryParams: {
+            access_type: "offline",
+            prompt: "consent",
+          },
+        },
+      });
+
+      if (error) {
+        if (
+          error.message?.toLowerCase().includes("provider is not enabled") ||
+          error.message?.toLowerCase().includes("unsupported provider")
+        ) {
+          setOauthError(
+            "Google Provider is not enabled in your Supabase Dashboard yet. You can sign in below with Email & Password, or enable Google under Authentication > Providers in Supabase."
+          );
+        } else {
+          toast.error(error.message);
+        }
+        setLoading(false);
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Failed to initiate Google sign in.");
+      setLoading(false);
+    }
+  };
+
+  // Magic Link (Passwordless email login)
+  const handleMagicLink = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email) return;
+
+    if (!isSupabaseConfigured()) {
+      toast.error("Supabase credentials not configured in .env.local yet.");
+      return;
+    }
+
+    setLoading(true);
+    const supabase = createClient();
+
+    try {
+      const { error } = await supabase.auth.signInWithOtp({
+        email,
+        options: {
+          emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(
+            next
+          )}`,
         },
       });
 
       if (error) {
         toast.error(error.message);
-        setLoading(false);
+      } else {
+        setMagicLinkSent(true);
+        toast.success("Magic sign-in link sent to your email!");
       }
     } catch (err: any) {
-      toast.error(err.message || "Failed to initiate Google sign in.");
+      toast.error(err.message || "Failed to send magic link.");
+    } finally {
       setLoading(false);
     }
   };
@@ -94,16 +150,39 @@ function LoginForm() {
           return;
         }
 
+        // Ensure profile is synced to Supabase
+        if (data.user) {
+          const nameToUse =
+            data.user.user_metadata?.full_name ||
+            data.user.user_metadata?.name ||
+            email.split("@")[0];
+          await supabase.from("profiles").upsert(
+            {
+              id: data.user.id,
+              display_name: nameToUse,
+              timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Kolkata",
+              preferred_ai: "chatgpt",
+              settings: { onboarded: true },
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "id" }
+          );
+        }
+
         toast.success("Signed in successfully!");
-        // Refresh and navigate
         router.refresh();
         router.push(next);
       } else {
         // Sign Up
+        const displayName = fullName.trim() || email.split("@")[0];
         const { data, error } = await supabase.auth.signUp({
           email,
           password,
           options: {
+            data: {
+              full_name: displayName,
+              name: displayName,
+            },
             emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(
               next
             )}`,
@@ -116,8 +195,22 @@ function LoginForm() {
           return;
         }
 
-        if (data.session) {
-          toast.success("Account created successfully!");
+        if (data.session && data.user) {
+          // Immediately save profile into Supabase profiles table
+          await supabase.from("profiles").upsert(
+            {
+              id: data.user.id,
+              display_name: displayName,
+              timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Kolkata",
+              preferred_ai: "chatgpt",
+              settings: { onboarded: true },
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "id" }
+          );
+
+          toast.success("Account created successfully! Logged in.");
           router.refresh();
           router.push("/onboarding");
         } else {
@@ -144,7 +237,13 @@ function LoginForm() {
             {APP_NAME}
           </span>
         </Link>
-        <ThemeToggle />
+        <div className="flex items-center gap-3">
+          <div className="hidden sm:flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 font-medium px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20">
+            <ShieldCheck className="w-3.5 h-3.5" />
+            <span>Supabase Connected</span>
+          </div>
+          <ThemeToggle />
+        </div>
       </div>
 
       {/* Main 2-Column Content */}
@@ -159,7 +258,7 @@ function LoginForm() {
               Master any skill, one 30-day chunk at a time.
             </h1>
             <p className="text-sm text-ink2 max-w-lg">
-              No generic chatbot clutter. Convert your favourite AI's responses into structured, checkable daily learning roadmaps.
+              Sign in to sync your learning roadmaps, daily tasks, and YouTube revision videos directly into your private Supabase database.
             </p>
           </div>
 
@@ -169,8 +268,8 @@ function LoginForm() {
                 <Sparkles className="w-4 h-4" />
               </div>
               <div className="text-xs">
-                <span className="font-semibold text-ink block">Copy a prompt, paste your AI's answer</span>
-                <span className="text-mute">Works with ChatGPT, Claude, Gemini or any LLM. Zero paid API tokens needed.</span>
+                <span className="font-semibold text-ink block">Live Supabase Database Sync</span>
+                <span className="text-mute">Your profiles, roadmaps, and progress are securely stored under your user ID via Row Level Security (RLS).</span>
               </div>
             </div>
 
@@ -179,8 +278,8 @@ function LoginForm() {
                 <CalendarDays className="w-4 h-4" />
               </div>
               <div className="text-xs">
-                <span className="font-semibold text-ink block">Lightweight 30-day sprints</span>
-                <span className="text-mute">Even for a 1-year goal, only focus on the next 30 days so you never feel overwhelmed.</span>
+                <span className="font-semibold text-ink block">Daily Plans & YouTube Revision</span>
+                <span className="text-mute">Track daily topics with embedded YouTube study videos and keep your study streak active.</span>
               </div>
             </div>
 
@@ -198,16 +297,20 @@ function LoginForm() {
 
         {/* Right Column: Auth Card */}
         <div className="lg:col-span-5">
-          <div className="rounded-lg bg-surface border border-line p-6 sm:p-8 shadow-card space-y-6">
+          <div className="rounded-xl bg-surface border border-line p-6 sm:p-8 shadow-card space-y-5">
             <div className="space-y-1 text-center sm:text-left">
               <span className="text-[11px] font-medium text-primary">
                 Chalo, shuru karte hain!
               </span>
               <h2 className="text-xl font-bold tracking-tight text-ink">
-                {tab === "signin" ? "Welcome back" : "Create your account"}
+                {tab === "signin"
+                  ? "Sign In to Your Account"
+                  : tab === "signup"
+                  ? "Create New Account"
+                  : "Sign In with Magic Link"}
               </h2>
               <p className="text-xs text-mute">
-                Your roadmaps and daily progress are strictly private to you.
+                Login via Google or Email. All data is saved to Supabase.
               </p>
             </div>
 
@@ -216,9 +319,9 @@ function LoginForm() {
               onClick={handleGoogleSignIn}
               disabled={loading}
               type="button"
-              className="w-full h-11 rounded-md border border-line bg-surface hover:bg-bg disabled:opacity-50 text-ink text-xs font-semibold flex items-center justify-center gap-2.5 transition-colors shadow-sm"
+              className="w-full h-11 rounded-lg border border-line bg-surface hover:bg-bg disabled:opacity-50 text-ink text-xs font-semibold flex items-center justify-center gap-2.5 transition-all shadow-sm hover:border-primary/40 active:scale-[0.99]"
             >
-              <svg className="w-4 h-4" viewBox="0 0 24 24">
+              <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
                 <path
                   fill="#4285F4"
                   d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.8-2.4 3.66v3.05h3.87c2.26-2.09 3.67-5.17 3.67-9.15z"
@@ -239,122 +342,213 @@ function LoginForm() {
               <span>Continue with Google</span>
             </button>
 
+            {/* OAuth Error Helper Alert */}
+            {oauthError && (
+              <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 p-3 text-xs text-amber-700 dark:text-amber-300 space-y-1">
+                <div className="flex items-center gap-1.5 font-semibold">
+                  <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                  <span>Google Provider Setup Notice</span>
+                </div>
+                <p className="text-[11px] leading-relaxed opacity-95">{oauthError}</p>
+              </div>
+            )}
+
             {/* Divider */}
             <div className="relative flex items-center justify-center">
               <div className="border-t border-line w-full" />
               <span className="bg-surface px-3 text-[11px] text-mute uppercase tracking-wider relative">
-                or
+                or use email
               </span>
+            </div>
+
+            {/* Mode Tabs */}
+            <div className="grid grid-cols-3 gap-1 p-1 bg-bg rounded-lg border border-line text-xs">
+              <button
+                type="button"
+                onClick={() => {
+                  setTab("signin");
+                  setSignupSuccess(false);
+                  setMagicLinkSent(false);
+                }}
+                className={`py-1.5 rounded-md font-medium transition-all ${
+                  tab === "signin"
+                    ? "bg-surface text-ink font-semibold shadow-sm border border-line"
+                    : "text-mute hover:text-ink"
+                }`}
+              >
+                Sign In
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setTab("signup");
+                  setSignupSuccess(false);
+                  setMagicLinkSent(false);
+                }}
+                className={`py-1.5 rounded-md font-medium transition-all ${
+                  tab === "signup"
+                    ? "bg-surface text-ink font-semibold shadow-sm border border-line"
+                    : "text-mute hover:text-ink"
+                }`}
+              >
+                Sign Up
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setTab("magic");
+                  setSignupSuccess(false);
+                  setMagicLinkSent(false);
+                }}
+                className={`py-1.5 rounded-md font-medium transition-all ${
+                  tab === "magic"
+                    ? "bg-surface text-ink font-semibold shadow-sm border border-line"
+                    : "text-mute hover:text-ink"
+                }`}
+              >
+                Magic Link
+              </button>
             </div>
 
             {/* Signup confirmation banner */}
             {signupSuccess && (
-              <div className="rounded-md bg-emerald-500/10 border border-emerald-500/20 p-3 text-xs text-emerald-700 dark:text-emerald-300 flex items-start gap-2">
-                <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
-                <span>Confirmation link sent to your email! Please check your inbox to activate your account.</span>
+              <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/25 p-3 text-xs text-emerald-700 dark:text-emerald-300 flex items-start gap-2">
+                <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-emerald-500" />
+                <div>
+                  <span className="font-semibold block">Confirmation link sent!</span>
+                  <span className="opacity-90">Please check your inbox at <strong>{email}</strong> to activate your account.</span>
+                </div>
               </div>
             )}
 
-            {/* Email Form */}
-            <form onSubmit={handleEmailAuth} className="space-y-3 text-xs">
-              <div>
-                <label className="block text-ink font-medium mb-1">Email address</label>
-                <input
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="name@example.com"
-                  className="w-full h-10 px-3 rounded-md bg-bg border border-line text-ink text-xs focus:outline-none focus:border-primary"
-                />
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-ink font-medium">Password</label>
-                  {tab === "signin" && (
-                    <Link
-                      href="/reset-password"
-                      className="text-[11px] text-primary hover:underline"
-                    >
-                      Forgot password?
-                    </Link>
-                  )}
+            {/* Magic Link confirmation banner */}
+            {magicLinkSent && (
+              <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/25 p-3 text-xs text-emerald-700 dark:text-emerald-300 flex items-start gap-2">
+                <Mail className="w-4 h-4 shrink-0 mt-0.5 text-emerald-500" />
+                <div>
+                  <span className="font-semibold block">Magic link sent!</span>
+                  <span className="opacity-90">Click the sign-in link sent to <strong>{email}</strong> to log in instantly without a password.</span>
                 </div>
-                <div className="relative">
+              </div>
+            )}
+
+            {/* Form */}
+            {tab === "magic" ? (
+              <form onSubmit={handleMagicLink} className="space-y-3 text-xs">
+                <div>
+                  <label className="block text-ink font-medium mb-1">Email address</label>
                   <input
-                    type={showPassword ? "text" : "password"}
+                    type="email"
                     required
-                    minLength={6}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full h-10 pl-3 pr-10 rounded-md bg-bg border border-line text-ink text-xs focus:outline-none focus:border-primary"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="name@example.com"
+                    className="w-full h-10 px-3 rounded-lg bg-bg border border-line text-ink text-xs focus:outline-none focus:border-primary transition-colors"
                   />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-mute hover:text-ink"
-                  >
-                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
+                  <span className="text-[11px] text-mute mt-1 block">
+                    We'll email you a passwordless 1-click login link.
+                  </span>
                 </div>
-              </div>
 
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full h-10 rounded-md bg-primary hover:bg-primary-hover disabled:opacity-50 text-white font-medium text-xs transition-colors shadow-sm flex items-center justify-center"
-              >
-                {loading ? (
-                  <span>Processing...</span>
-                ) : tab === "signin" ? (
-                  "Sign In"
-                ) : (
-                  "Create Account"
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="w-full h-10 rounded-lg bg-primary hover:bg-primary-hover disabled:opacity-50 text-white font-medium text-xs transition-colors shadow-sm flex items-center justify-center gap-1.5"
+                >
+                  <Mail className="w-3.5 h-3.5" />
+                  <span>{loading ? "Sending..." : "Send Magic Link"}</span>
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleEmailAuth} className="space-y-3 text-xs">
+                {tab === "signup" && (
+                  <div>
+                    <label className="block text-ink font-medium mb-1">Your Full Name</label>
+                    <input
+                      type="text"
+                      required
+                      value={fullName}
+                      onChange={(e) => setFullName(e.target.value)}
+                      placeholder="e.g. Dhruv Sharma"
+                      className="w-full h-10 px-3 rounded-lg bg-bg border border-line text-ink text-xs focus:outline-none focus:border-primary transition-colors"
+                    />
+                  </div>
                 )}
-              </button>
-            </form>
 
-            {/* Tab switch */}
-            <div className="text-center text-xs text-mute pt-1">
-              {tab === "signin" ? (
-                <>
-                  Don't have an account?{" "}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setTab("signup");
-                      setSignupSuccess(false);
-                    }}
-                    className="text-primary hover:underline font-medium"
-                  >
-                    Sign up
-                  </button>
-                </>
-              ) : (
-                <>
-                  Already have an account?{" "}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setTab("signin");
-                      setSignupSuccess(false);
-                    }}
-                    className="text-primary hover:underline font-medium"
-                  >
-                    Sign in
-                  </button>
-                </>
-              )}
+                <div>
+                  <label className="block text-ink font-medium mb-1">Email address</label>
+                  <input
+                    type="email"
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="name@example.com"
+                    className="w-full h-10 px-3 rounded-lg bg-bg border border-line text-ink text-xs focus:outline-none focus:border-primary transition-colors"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-ink font-medium">Password</label>
+                    {tab === "signin" && (
+                      <Link
+                        href="/reset-password"
+                        className="text-[11px] text-primary hover:underline"
+                      >
+                        Forgot password?
+                      </Link>
+                    )}
+                  </div>
+                  <div className="relative">
+                    <input
+                      type={showPassword ? "text" : "password"}
+                      required
+                      minLength={6}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full h-10 pl-3 pr-10 rounded-lg bg-bg border border-line text-ink text-xs focus:outline-none focus:border-primary transition-colors"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-mute hover:text-ink"
+                    >
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="w-full h-10 rounded-lg bg-primary hover:bg-primary-hover disabled:opacity-50 text-white font-medium text-xs transition-colors shadow-sm flex items-center justify-center"
+                >
+                  {loading ? (
+                    <span>Processing...</span>
+                  ) : tab === "signin" ? (
+                    "Sign In with Email"
+                  ) : (
+                    "Create Account in Supabase"
+                  )}
+                </button>
+              </form>
+            )}
+
+            {/* Bottom footnote */}
+            <div className="text-center text-[11px] text-mute pt-1">
+              <span>All authentication sessions and profile data are stored directly in your Supabase project.</span>
             </div>
           </div>
         </div>
       </div>
 
       {/* Footer */}
-      <div className="w-full max-w-6xl mx-auto text-center text-xs text-mute">
-        <span>Your roadmaps and daily progress are strictly private via Row Level Security (RLS).</span>
+      <div className="w-full max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-mute pt-4 border-t border-line">
+        <span>Protected via Supabase Row Level Security (RLS) policies.</span>
+        <Link href="/mapping" className="text-primary hover:underline font-medium">
+          Inspect Database Tables →
+        </Link>
       </div>
     </div>
   );
