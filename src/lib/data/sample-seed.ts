@@ -1,6 +1,8 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 import seedData from "../../../supabase/seed-sample.json";
 
+export const sampleSeedData = seedData;
+
 export async function insertSampleData(supabase: SupabaseClient, userId: string) {
   // 1. Create Sample Skill
   const { data: skill, error: skillError } = await supabase
