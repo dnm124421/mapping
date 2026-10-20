@@ -11,9 +11,11 @@ import {
   Flame,
   ExternalLink,
   Sparkles,
+  LogOut,
 } from "lucide-react";
 import { APP_NAME, APP_TAGLINE } from "@/lib/constants";
 import { ThemeToggle } from "./ThemeToggle";
+import { useAuth } from "@/components/providers/AuthProvider";
 
 const NAV_ITEMS = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
@@ -30,6 +32,16 @@ const AI_HELPERS = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const { user, profile, signOut } = useAuth();
+
+  const displayName =
+    profile?.display_name ||
+    user?.user_metadata?.full_name ||
+    user?.user_metadata?.name ||
+    user?.email?.split("@")[0] ||
+    "Dhruv";
+
+  const initial = displayName.charAt(0).toUpperCase();
 
   return (
     <aside className="hidden lg:flex w-60 flex-col justify-between border-r border-line bg-surface/80 backdrop-blur-sm fixed top-0 bottom-0 left-0 z-30">
@@ -112,21 +124,46 @@ export function Sidebar() {
 
         <div className="flex items-center justify-between p-2 rounded-md bg-bg border border-line">
           <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-7 h-7 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center text-primary font-semibold text-xs">
-              D
-            </div>
+            {profile?.avatar_url ? (
+              <img
+                src={profile.avatar_url}
+                alt={displayName}
+                className="w-7 h-7 rounded-full object-cover border border-line"
+              />
+            ) : (
+              <div className="w-7 h-7 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center text-primary font-semibold text-xs">
+                {initial}
+              </div>
+            )}
             <div className="flex flex-col min-w-0">
-              <span className="text-xs font-medium text-ink truncate">Dhruv</span>
-              <span className="text-[10px] text-mute">Free Account</span>
+              <span className="text-xs font-medium text-ink truncate" title={displayName}>
+                {displayName}
+              </span>
+              <span className="text-[10px] text-mute truncate">
+                {user ? user.email : "Free Account"}
+              </span>
             </div>
           </div>
-          <Link
-            href="/settings"
-            className="p-1.5 rounded-md text-mute hover:text-ink hover:bg-surface transition-colors"
-            title="Settings & Data Vault"
-          >
-            <Settings className="w-4 h-4" />
-          </Link>
+
+          <div className="flex items-center gap-1">
+            <Link
+              href="/settings"
+              className="p-1.5 rounded-md text-mute hover:text-ink hover:bg-surface transition-colors"
+              title="Settings & Data Vault"
+            >
+              <Settings className="w-4 h-4" />
+            </Link>
+            {user && (
+              <button
+                type="button"
+                onClick={signOut}
+                className="p-1.5 rounded-md text-mute hover:text-rose-600 hover:bg-surface transition-colors"
+                title="Sign Out"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </aside>

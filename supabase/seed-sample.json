@@ -1,0 +1,123 @@
+{
+  "roadmap": {
+    "skill": "DSA in C++",
+    "level": "beginner",
+    "summary": "From C++ basics to trees, graphs and dynamic programming for interviews.",
+    "stages": [
+      {
+        "id": 1,
+        "title": "C++ Foundations",
+        "goal": "Write small C++ programs confidently.",
+        "est_weeks": 3,
+        "focus_archetype": "theory",
+        "topics": [
+          {
+            "id": "1.1",
+            "title": "Variables, data types and I/O",
+            "subtopics": ["int, float, char, bool", "cin and cout", "type casting"],
+            "resources": [{ "title": "C++ tutorial", "url": "https://cplusplus.com/doc/tutorial/" }],
+            "difficulty": "easy",
+            "est_minutes": 90
+          },
+          {
+            "id": "1.2",
+            "title": "Control flow and functions",
+            "subtopics": ["if/else, loops", "functions and scope", "pass by value and reference"],
+            "resources": [{ "title": "cppreference", "url": "https://en.cppreference.com/" }],
+            "difficulty": "easy",
+            "est_minutes": 120
+          },
+          {
+            "id": "1.3",
+            "title": "Pointers and references",
+            "subtopics": ["pointer basics", "dynamic memory", "common pitfalls"],
+            "resources": [],
+            "difficulty": "medium",
+            "est_minutes": 120
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "title": "Core Data Structures",
+        "goal": "Implement arrays, lists, stacks and queues.",
+        "est_weeks": 4,
+        "focus_archetype": "practice",
+        "topics": [
+          { "id": "2.1", "title": "Arrays and strings", "subtopics": ["two pointers", "prefix sums"], "resources": [], "difficulty": "easy", "est_minutes": 120 },
+          { "id": "2.2", "title": "Linked lists", "subtopics": ["singly and doubly linked", "reversal"], "resources": [], "difficulty": "medium", "est_minutes": 120 },
+          { "id": "2.3", "title": "Stacks and queues", "subtopics": ["STL stack and queue", "monotonic stack"], "resources": [], "difficulty": "medium", "est_minutes": 90 }
+        ]
+      },
+      {
+        "id": 3,
+        "title": "Trees and Graphs",
+        "goal": "Traverse and reason about hierarchical data.",
+        "est_weeks": 4,
+        "focus_archetype": "project",
+        "topics": [
+          { "id": "3.1", "title": "Binary trees and BST", "subtopics": ["traversals", "insert and delete"], "resources": [], "difficulty": "medium", "est_minutes": 150 },
+          { "id": "3.2", "title": "Heaps and priority queues", "subtopics": ["min-heap", "heapify"], "resources": [], "difficulty": "medium", "est_minutes": 120 },
+          { "id": "3.3", "title": "Graph basics", "subtopics": ["BFS and DFS", "adjacency list"], "resources": [{ "title": "CP-Algorithms", "url": "https://cp-algorithms.com/" }], "difficulty": "hard", "est_minutes": 150 }
+        ]
+      },
+      {
+        "id": 4,
+        "title": "Algorithms and Interview Prep",
+        "goal": "Solve medium problems with the right technique.",
+        "est_weeks": 5,
+        "focus_archetype": "interview",
+        "topics": [
+          { "id": "4.1", "title": "Sorting and searching", "subtopics": ["binary search", "merge and quick sort"], "resources": [], "difficulty": "medium", "est_minutes": 120 },
+          { "id": "4.2", "title": "Recursion and backtracking", "subtopics": ["subsets", "permutations"], "resources": [], "difficulty": "hard", "est_minutes": 150 },
+          { "id": "4.3", "title": "Dynamic programming basics", "subtopics": ["memoization", "tabulation"], "resources": [], "difficulty": "hard", "est_minutes": 180 }
+        ]
+      }
+    ]
+  },
+  "plan": {
+    "skill": "DSA in C++",
+    "start_date": "2026-11-02",
+    "deadline": "2027-11-02",
+    "chunk": { "number": 1, "from_day": 1, "to_day": 3 },
+    "days": [
+      {
+        "day": 1,
+        "date": "2026-11-02",
+        "focus": "Variables, data types and I/O",
+        "tasks": [
+          { "title": "Watch: C++ data types", "est_minutes": 40, "roadmap_ref": "1.1", "kind": "learn" },
+          {
+            "title": "Write 5 small input/output programs",
+            "est_minutes": 50,
+            "roadmap_ref": "1.1",
+            "kind": "practice",
+            "checklist": [
+              { "text": "Read two numbers and print the sum", "done": false },
+              { "text": "Swap two variables", "done": false },
+              { "text": "Print a multiplication table", "done": false }
+            ]
+          }
+        ]
+      },
+      {
+        "day": 2,
+        "date": "2026-11-03",
+        "focus": "Control flow",
+        "tasks": [
+          { "title": "Read: if/else and loops", "est_minutes": 35, "roadmap_ref": "1.2", "kind": "learn" },
+          { "title": "Solve 4 loop problems", "est_minutes": 55, "roadmap_ref": "1.2", "kind": "practice" }
+        ]
+      },
+      {
+        "day": 3,
+        "date": "2026-11-04",
+        "focus": "Functions",
+        "tasks": [
+          { "title": "Watch: functions and scope", "est_minutes": 40, "roadmap_ref": "1.2", "kind": "learn" },
+          { "title": "Refactor yesterday's programs into functions", "est_minutes": 50, "roadmap_ref": "1.2", "kind": "project" }
+        ]
+      }
+    ]
+  }
+}

@@ -1,22 +1,106 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Route, Sparkles, ArrowRight, Check } from "lucide-react";
-import { ThemeToggle } from "@/components/shell/ThemeToggle";
 import { APP_NAME } from "@/lib/constants";
+import { createClient, isSupabaseConfigured } from "@/lib/supabase/client";
+import { insertSampleData } from "@/lib/data/sample-seed";
 import { toast } from "sonner";
 
 export default function OnboardingPage() {
+  const router = useRouter();
   const [step, setStep] = useState(1);
   const [name, setName] = useState("Dhruv");
   const [timezone, setTimezone] = useState("Asia/Kolkata");
-  const [preferredAi, setPreferredAi] = useState("chatgpt");
+  const [preferredAi, setPreferredAi] = useState<"chatgpt" | "claude" | "gemini" | "other">("chatgpt");
   const [loadSample, setLoadSample] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [user, setUser] = useState<any>(null);
 
-  const handleFinish = () => {
-    toast.success("Welcome aboard! Navigating to your dashboard...");
-    window.location.href = "/";
+  useEffect(() => {
+    // Detect system timezone
+    try {
+      const detected = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (detected) setTimezone(detected);
+    } catch {}
+
+    // Check auth user if Supabase is active
+    if (isSupabaseConfigured()) {
+      const supabase = createClient();
+      supabase.auth.getUser().then(({ data }) => {
+        if (data?.user) {
+          setUser(data.user);
+          const metaName =
+            data.user.user_metadata?.full_name ||
+            data.user.user_metadata?.name ||
+            data.user.email?.split("@")[0];
+          if (metaName) setName(metaName);
+        }
+      });
+    }
+  }, []);
+
+  const handleFinish = async () => {
+    setLoading(true);
+
+    if (isSupabaseConfigured() && user) {
+      const supabase = createClient();
+      try {
+        // 1. Update Profile
+        const { error: profileError } = await supabase
+          .from("profiles")
+          .upsert({
+            id: user.id,
+            display_name: name,
+            timezone,
+            preferred_ai: preferredAi,
+            settings: {
+              onboarded: true,
+              sample_loaded: loadSample,
+              tone: "hinglish",
+              buffer_enabled: true,
+              buffer_count: 3,
+            },
+            updated_at: new Date().toISOString(),
+          });
+
+        if (profileError) {
+          console.warn("Profile update error:", profileError);
+        }
+
+        // 2. Load Sample Data if requested
+        if (loadSample) {
+          await insertSampleData(supabase, user.id);
+        }
+
+        toast.success("Welcome aboard! Let's get started.");
+        router.refresh();
+        router.push("/");
+        return;
+      } catch (err: any) {
+        toast.error(err.message || "Could not complete setup. Redirecting...");
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    // Fallback for preview mode
+    toast.success("Welcome aboard! Entering Dashboard...");
+    router.refresh();
+    router.push("/");
+  };
+
+  const handleSkip = async () => {
+    if (isSupabaseConfigured() && user) {
+      const supabase = createClient();
+      await supabase.from("profiles").upsert({
+        id: user.id,
+        settings: { onboarded: true },
+      });
+    }
+    router.push("/");
   };
 
   return (
@@ -30,9 +114,12 @@ export default function OnboardingPage() {
             {APP_NAME}
           </span>
         </div>
-        <Link href="/" className="text-xs text-mute hover:text-ink">
+        <button
+          onClick={handleSkip}
+          className="text-xs text-mute hover:text-ink transition-colors"
+        >
           Skip for now
-        </Link>
+        </button>
       </div>
 
       <div className="w-full max-w-xl mx-auto my-8">
@@ -90,6 +177,9 @@ export default function OnboardingPage() {
                   <option value="Asia/Kolkata">Asia/Kolkata (India Standard Time)</option>
                   <option value="UTC">UTC</option>
                   <option value="America/New_York">America/New_York (EST)</option>
+                  <option value="Europe/London">Europe/London (GMT)</option>
+                  <option value="Asia/Dubai">Asia/Dubai (GST)</option>
+                  <option value="Asia/Singapore">Asia/Singapore (SGT)</option>
                 </select>
                 <span className="text-[11px] text-mute mt-1 block">
                   All streak boundaries and daily targets are calculated accurately in your local timezone.
@@ -99,7 +189,7 @@ export default function OnboardingPage() {
               <div>
                 <label className="block text-ink font-medium mb-1">Preferred AI tool</label>
                 <div className="grid grid-cols-3 gap-2 pt-1">
-                  {["chatgpt", "claude", "gemini"].map((ai) => (
+                  {(["chatgpt", "claude", "gemini"] as const).map((ai) => (
                     <button
                       key={ai}
                       type="button"
@@ -163,6 +253,7 @@ export default function OnboardingPage() {
             {step > 1 ? (
               <button
                 type="button"
+                disabled={loading}
                 onClick={() => setStep(step - 1)}
                 className="px-3.5 py-2 rounded-md border border-line bg-surface hover:bg-bg text-ink text-xs font-medium transition-colors"
               >
@@ -182,10 +273,11 @@ export default function OnboardingPage() {
             ) : (
               <button
                 type="button"
+                disabled={loading}
                 onClick={handleFinish}
-                className="flex items-center gap-1.5 px-5 py-2 rounded-md bg-primary hover:bg-primary-hover text-white text-xs font-semibold transition-colors shadow-sm"
+                className="flex items-center gap-1.5 px-5 py-2 rounded-md bg-primary hover:bg-primary-hover disabled:opacity-50 text-white text-xs font-semibold transition-colors shadow-sm"
               >
-                <span>Enter Dashboard</span>
+                <span>{loading ? "Setting up..." : "Enter Dashboard"}</span>
                 <Sparkles className="w-3.5 h-3.5" />
               </button>
             )}

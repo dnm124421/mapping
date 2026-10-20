@@ -1,25 +1,135 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, Suspense } from "react";
 import Link from "next/link";
-import { Route, Sparkles, CalendarDays, Flame, Eye, EyeOff } from "lucide-react";
+import { useSearchParams, useRouter } from "next/navigation";
+import {
+  Route,
+  Sparkles,
+  CalendarDays,
+  Flame,
+  Eye,
+  EyeOff,
+  CheckCircle2,
+} from "lucide-react";
 import { ThemeToggle } from "@/components/shell/ThemeToggle";
-import { APP_NAME, APP_TAGLINE } from "@/lib/constants";
+import { APP_NAME } from "@/lib/constants";
+import { createClient, isSupabaseConfigured } from "@/lib/supabase/client";
 import { toast } from "sonner";
 
-export default function LoginPage() {
+function LoginForm() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const next = searchParams.get("next") || "/";
+  const errorParam = searchParams.get("error");
+
   const [tab, setTab] = useState<"signin" | "signup">("signin");
   const [showPassword, setShowPassword] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [signupSuccess, setSignupSuccess] = useState(false);
 
-  const handleGoogleSignIn = () => {
-    toast.info("Google OAuth will be connected in Phase 1 with Supabase.");
+  useEffect(() => {
+    if (errorParam === "auth_failed") {
+      toast.error("Authentication failed. Please try signing in again.");
+    }
+  }, [errorParam]);
+
+  // Google OAuth handler
+  const handleGoogleSignIn = async () => {
+    if (!isSupabaseConfigured()) {
+      toast.error(
+        "Supabase credentials not configured in .env.local yet. See README / setup guide."
+      );
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const supabase = createClient();
+      const origin = window.location.origin;
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: `${origin}/auth/callback?next=${encodeURIComponent(next)}`,
+        },
+      });
+
+      if (error) {
+        toast.error(error.message);
+        setLoading(false);
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Failed to initiate Google sign in.");
+      setLoading(false);
+    }
   };
 
-  const handleEmailAuth = (e: React.FormEvent) => {
+  // Email Sign In / Sign Up
+  const handleEmailAuth = async (e: React.FormEvent) => {
     e.preventDefault();
-    toast.info("Email auth will be connected in Phase 1 with Supabase.");
+    if (!email || !password) return;
+
+    if (!isSupabaseConfigured()) {
+      toast.error(
+        "Supabase credentials not configured in .env.local yet. Add NEXT_PUBLIC_SUPABASE_URL and KEY."
+      );
+      return;
+    }
+
+    setLoading(true);
+    const supabase = createClient();
+
+    try {
+      if (tab === "signin") {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+
+        if (error) {
+          toast.error(error.message);
+          setLoading(false);
+          return;
+        }
+
+        toast.success("Signed in successfully!");
+        // Refresh and navigate
+        router.refresh();
+        router.push(next);
+      } else {
+        // Sign Up
+        const { data, error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(
+              next
+            )}`,
+          },
+        });
+
+        if (error) {
+          toast.error(error.message);
+          setLoading(false);
+          return;
+        }
+
+        if (data.session) {
+          toast.success("Account created successfully!");
+          router.refresh();
+          router.push("/onboarding");
+        } else {
+          setSignupSuccess(true);
+          toast.success("Confirmation email sent! Please check your inbox.");
+        }
+      }
+    } catch (err: any) {
+      toast.error(err.message || "An unexpected authentication error occurred.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -104,8 +214,9 @@ export default function LoginPage() {
             {/* Google OAuth Button */}
             <button
               onClick={handleGoogleSignIn}
+              disabled={loading}
               type="button"
-              className="w-full h-11 rounded-md border border-line bg-surface hover:bg-bg text-ink text-xs font-semibold flex items-center justify-center gap-2.5 transition-colors shadow-sm"
+              className="w-full h-11 rounded-md border border-line bg-surface hover:bg-bg disabled:opacity-50 text-ink text-xs font-semibold flex items-center justify-center gap-2.5 transition-colors shadow-sm"
             >
               <svg className="w-4 h-4" viewBox="0 0 24 24">
                 <path
@@ -136,12 +247,21 @@ export default function LoginPage() {
               </span>
             </div>
 
+            {/* Signup confirmation banner */}
+            {signupSuccess && (
+              <div className="rounded-md bg-emerald-500/10 border border-emerald-500/20 p-3 text-xs text-emerald-700 dark:text-emerald-300 flex items-start gap-2">
+                <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>Confirmation link sent to your email! Please check your inbox to activate your account.</span>
+              </div>
+            )}
+
             {/* Email Form */}
             <form onSubmit={handleEmailAuth} className="space-y-3 text-xs">
               <div>
                 <label className="block text-ink font-medium mb-1">Email address</label>
                 <input
                   type="email"
+                  required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="name@example.com"
@@ -150,10 +270,22 @@ export default function LoginPage() {
               </div>
 
               <div>
-                <label className="block text-ink font-medium mb-1">Password</label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-ink font-medium">Password</label>
+                  {tab === "signin" && (
+                    <Link
+                      href="/reset-password"
+                      className="text-[11px] text-primary hover:underline"
+                    >
+                      Forgot password?
+                    </Link>
+                  )}
+                </div>
                 <div className="relative">
                   <input
                     type={showPassword ? "text" : "password"}
+                    required
+                    minLength={6}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
@@ -171,9 +303,16 @@ export default function LoginPage() {
 
               <button
                 type="submit"
-                className="w-full h-10 rounded-md bg-primary hover:bg-primary-hover text-white font-medium text-xs transition-colors shadow-sm"
+                disabled={loading}
+                className="w-full h-10 rounded-md bg-primary hover:bg-primary-hover disabled:opacity-50 text-white font-medium text-xs transition-colors shadow-sm flex items-center justify-center"
               >
-                {tab === "signin" ? "Sign In" : "Create Account"}
+                {loading ? (
+                  <span>Processing...</span>
+                ) : tab === "signin" ? (
+                  "Sign In"
+                ) : (
+                  "Create Account"
+                )}
               </button>
             </form>
 
@@ -183,7 +322,11 @@ export default function LoginPage() {
                 <>
                   Don't have an account?{" "}
                   <button
-                    onClick={() => setTab("signup")}
+                    type="button"
+                    onClick={() => {
+                      setTab("signup");
+                      setSignupSuccess(false);
+                    }}
                     className="text-primary hover:underline font-medium"
                   >
                     Sign up
@@ -193,7 +336,11 @@ export default function LoginPage() {
                 <>
                   Already have an account?{" "}
                   <button
-                    onClick={() => setTab("signin")}
+                    type="button"
+                    onClick={() => {
+                      setTab("signin");
+                      setSignupSuccess(false);
+                    }}
                     className="text-primary hover:underline font-medium"
                   >
                     Sign in
@@ -207,8 +354,22 @@ export default function LoginPage() {
 
       {/* Footer */}
       <div className="w-full max-w-6xl mx-auto text-center text-xs text-mute">
-        <span>Your data lives in your Supabase account. Free and open.</span>
+        <span>Your roadmaps and daily progress are strictly private via Row Level Security (RLS).</span>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-bg flex items-center justify-center text-xs text-mute">
+          Loading sign-in...
+        </div>
+      }
+    >
+      <LoginForm />
+    </Suspense>
   );
 }
