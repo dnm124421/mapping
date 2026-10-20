@@ -759,3 +759,119 @@ export async function activateNextChunk({
   }
 }
 
+/**
+ * Fetches a single task by ID
+ */
+export async function fetchTaskById(
+  taskId: string,
+  supabase?: SupabaseClient | null,
+  userId?: string
+): Promise<{ task: PlanTaskItem; skillName: string } | null> {
+  if (!supabase || !userId) {
+    const local = getLocalPlans();
+    for (const p of local) {
+      const found = p.allTasks.find((t) => t.id === taskId || taskId === "demo-task" || taskId === "sample-task");
+      if (found) {
+        return { task: found, skillName: p.skill_name };
+      }
+    }
+    // Fallback to first task of sample plan
+    if (local[0]?.allTasks[0]) {
+      return { task: local[0].allTasks[0], skillName: local[0].skill_name };
+    }
+    return null;
+  }
+
+  try {
+    const { data: task, error } = await supabase
+      .from("tasks")
+      .select("*, plans(skill_id, skills(name))")
+      .eq("id", taskId)
+      .eq("user_id", userId)
+      .single();
+
+    if (error || !task) {
+      // Try local fallback
+      const local = getLocalPlans();
+      for (const p of local) {
+        const found = p.allTasks.find((t) => t.id === taskId);
+        if (found) return { task: found, skillName: p.skill_name };
+      }
+      return null;
+    }
+
+    const skillName = (task.plans as any)?.skills?.name || "Skill";
+    return {
+      task: {
+        id: task.id,
+        plan_id: task.plan_id,
+        day_id: task.day_id,
+        title: task.title,
+        description: task.description,
+        est_minutes: task.est_minutes,
+        roadmap_ref: task.roadmap_ref,
+        kind: task.kind,
+        checklist: task.checklist || [],
+        status: task.status,
+        scheduled_date: task.scheduled_date,
+        original_date: task.original_date,
+        completed_at: task.completed_at,
+        position: task.position,
+        is_custom: task.is_custom || false,
+      },
+      skillName,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Logs a completed or active focus session
+ */
+export async function logFocusSession({
+  taskId,
+  plannedMinutes,
+  actualMinutes,
+  supabase,
+  userId,
+}: {
+  taskId: string;
+  plannedMinutes: number;
+  actualMinutes: number;
+  supabase?: SupabaseClient | null;
+  userId?: string;
+}): Promise<void> {
+  if (!supabase || !userId) {
+    if (typeof window !== "undefined") {
+      const raw = localStorage.getItem("roadmap_planner_focus_sessions") || "[]";
+      try {
+        const sessions = JSON.parse(raw);
+        sessions.push({
+          id: `fs-${Date.now()}`,
+          taskId,
+          plannedMinutes,
+          actualMinutes,
+          completedAt: new Date().toISOString(),
+        });
+        localStorage.setItem("roadmap_planner_focus_sessions", JSON.stringify(sessions));
+      } catch {}
+    }
+    return;
+  }
+
+  try {
+    await supabase.from("focus_sessions").insert({
+      user_id: userId,
+      task_id: taskId.startsWith("task-") || taskId.startsWith("custom-") ? null : taskId,
+      planned_minutes: plannedMinutes,
+      actual_minutes: actualMinutes,
+      started_at: new Date(Date.now() - actualMinutes * 60000).toISOString(),
+      ended_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.warn("Could not log focus session to supabase:", err);
+  }
+}
+
+
