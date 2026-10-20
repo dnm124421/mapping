@@ -17,7 +17,7 @@ export interface SkillWithRoadmap {
     daily_minutes?: number;
     created_at: string;
   } | null;
-  topicProgress: Record<string, { done: boolean; notes?: string }>;
+  topicProgress: Record<string, { done: boolean; notes?: string; video_url?: string }>;
   stats: {
     totalTopics: number;
     doneTopics: number;
@@ -191,7 +191,7 @@ export async function fetchRoadmapById(
 ): Promise<{
   roadmap: { id: string; version: number; data: Roadmap; daily_minutes?: number };
   skill: { id: string; name: string; level: string; category?: string };
-  topicProgress: Record<string, { done: boolean; notes?: string }>;
+  topicProgress: Record<string, { done: boolean; notes?: string; video_url?: string }>;
 } | null> {
   if (!supabase || !userId) {
     const local = getLocalData();
@@ -236,9 +236,9 @@ export async function fetchRoadmapById(
       .eq("roadmap_id", roadmapId)
       .eq("user_id", userId);
 
-    const topicProgress: Record<string, { done: boolean; notes?: string }> = {};
+    const topicProgress: Record<string, { done: boolean; notes?: string; video_url?: string }> = {};
     (progress || []).forEach((p) => {
-      topicProgress[p.topic_id] = { done: p.done, notes: p.notes };
+      topicProgress[p.topic_id] = { done: p.done, notes: p.notes, video_url: p.video_url };
     });
 
     return {
@@ -454,3 +454,83 @@ export async function deleteSkillAndRoadmap(
 
   if (error) throw error;
 }
+
+/**
+ * Saves or updates YouTube revision video for a topic
+ */
+export async function saveTopicVideoProgress(
+  roadmapId: string,
+  topicId: string,
+  videoUrl: string,
+  supabase?: SupabaseClient | null,
+  userId?: string
+) {
+  const cleanUrl = videoUrl.trim();
+  if (typeof window !== "undefined") {
+    const local = getLocalData();
+    const item = local.find((s) => s.roadmap?.id === roadmapId || roadmapId === "sample-1");
+    if (item) {
+      if (!item.topicProgress) item.topicProgress = {};
+      if (!item.topicProgress[topicId]) {
+        item.topicProgress[topicId] = { done: false, video_url: cleanUrl };
+      } else {
+        item.topicProgress[topicId].video_url = cleanUrl;
+      }
+      saveLocalData(local);
+    }
+
+    try {
+      const rawVideos = localStorage.getItem("roadmap_planner_topic_videos");
+      const map = rawVideos ? JSON.parse(rawVideos) : {};
+      map[topicId] = cleanUrl;
+      map[`${roadmapId}_${topicId}`] = cleanUrl;
+      localStorage.setItem("roadmap_planner_topic_videos", JSON.stringify(map));
+    } catch {}
+  }
+
+  if (supabase && userId) {
+    try {
+      await supabase.from("topic_progress").upsert(
+        {
+          user_id: userId,
+          roadmap_id: roadmapId,
+          topic_id: topicId,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "roadmap_id,topic_id" }
+      );
+    } catch (err) {
+      console.warn("Could not save topic video in supabase:", err);
+    }
+  }
+}
+
+/**
+ * Removes YouTube revision video for a topic
+ */
+export async function removeTopicVideoProgress(
+  roadmapId: string,
+  topicId: string,
+  supabase?: SupabaseClient | null,
+  userId?: string
+) {
+  if (typeof window !== "undefined") {
+    const local = getLocalData();
+    const item = local.find((s) => s.roadmap?.id === roadmapId || roadmapId === "sample-1");
+    if (item && item.topicProgress && item.topicProgress[topicId]) {
+      delete item.topicProgress[topicId].video_url;
+      saveLocalData(local);
+    }
+
+    try {
+      const rawVideos = localStorage.getItem("roadmap_planner_topic_videos");
+      if (rawVideos) {
+        const map = JSON.parse(rawVideos);
+        delete map[topicId];
+        delete map[`${roadmapId}_${topicId}`];
+        localStorage.setItem("roadmap_planner_topic_videos", JSON.stringify(map));
+      }
+    } catch {}
+  }
+}
+

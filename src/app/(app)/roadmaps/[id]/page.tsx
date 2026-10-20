@@ -19,6 +19,10 @@ import {
   Clock,
   NotebookPen,
   AlertCircle,
+  Youtube,
+  Video,
+  Plus,
+  Trash2,
 } from "lucide-react";
 import { useAuth } from "@/components/providers/AuthProvider";
 import { createClient, isSupabaseConfigured } from "@/lib/supabase/client";
@@ -26,30 +30,44 @@ import {
   fetchRoadmapById,
   toggleTopicProgress,
   saveTopicNotes,
+  saveTopicVideoProgress,
+  removeTopicVideoProgress,
 } from "@/lib/data/roadmaps";
 import { Roadmap, Stage, Topic } from "@/lib/schemas";
 import { calculateRoadmapProgress, calculateStageProgress } from "@/lib/logic/progress";
 import { buildDoubtPrompt } from "@/lib/prompts";
+import {
+  extractYouTubeId,
+  getYouTubeEmbedUrl,
+  getYouTubeSearchUrl,
+  getSavedTopicVideo,
+} from "@/lib/video";
 import { toast } from "sonner";
 
 export default function RoadmapDetailPage() {
   const params = useParams();
   const router = useRouter();
   const { user, profile } = useAuth();
-  const roadmapId = params?.id as string;
+  const roadmapId = params.id as string;
 
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<{
+    skill: { id: string; name: string; category?: string; level: string };
     roadmap: { id: string; version: number; data: Roadmap; daily_minutes?: number };
-    skill: { id: string; name: string; level: string; category?: string };
-    topicProgress: Record<string, { done: boolean; notes?: string }>;
+    topicProgress: Record<string, { done: boolean; notes?: string; video_url?: string }>;
   } | null>(null);
 
+  // Accordion state: map stageId -> boolean
   const [expandedStages, setExpandedStages] = useState<Record<number, boolean>>({});
+  // Selected topic for Study Dossier
   const [selectedTopic, setSelectedTopic] = useState<Topic | null>(null);
   const [notesText, setNotesText] = useState("");
   const [notesSaveStatus, setNotesSaveStatus] = useState<"saved" | "saving" | "idle">("idle");
   const [doubtCopied, setDoubtCopied] = useState(false);
+
+  // Video state in dossier
+  const [videoInputUrl, setVideoInputUrl] = useState("");
+  const [isVideoInputOpen, setIsVideoInputOpen] = useState(false);
 
   // Load roadmap details
   const loadRoadmap = async () => {
@@ -73,37 +91,57 @@ export default function RoadmapDetailPage() {
     setExpandedStages({ [progressInfo.currentStageId]: true });
 
     // Preselect first topic of the active stage
-    const activeStage = res.roadmap.data.stages.find((s) => s.id === progressInfo.currentStageId) || res.roadmap.data.stages[0];
+    const activeStage =
+      res.roadmap.data.stages.find((s) => s.id === progressInfo.currentStageId) ||
+      res.roadmap.data.stages[0];
     if (activeStage && activeStage.topics.length > 0) {
-      setSelectedTopic(activeStage.topics[0]);
-      setNotesText(res.topicProgress[activeStage.topics[0].id]?.notes || "");
+      const firstTopic = activeStage.topics[0];
+      setSelectedTopic(firstTopic);
+      setNotesText(res.topicProgress[firstTopic.id]?.notes || "");
+      const savedVid =
+        res.topicProgress[firstTopic.id]?.video_url ||
+        getSavedTopicVideo(res.roadmap.id, firstTopic.id) ||
+        "";
+      setVideoInputUrl(savedVid);
     }
 
     setLoading(false);
   };
 
   useEffect(() => {
-    if (roadmapId) {
-      loadRoadmap();
-    }
+    loadRoadmap();
   }, [roadmapId, user]);
 
-  // Sync selected topic notes when changing topic
+  // Topic selection handler
   const handleSelectTopic = (topic: Topic) => {
     setSelectedTopic(topic);
-    setNotesText(data?.topicProgress[topic.id]?.notes || "");
-    setNotesSaveStatus("idle");
+    if (data) {
+      setNotesText(data.topicProgress[topic.id]?.notes || "");
+      const savedVid =
+        data.topicProgress[topic.id]?.video_url ||
+        getSavedTopicVideo(data.roadmap.id, topic.id) ||
+        "";
+      setVideoInputUrl(savedVid);
+      setIsVideoInputOpen(false);
+    }
   };
 
-  // Optimistic Topic Progress Toggle
+  // Toggle stage accordion
+  const toggleStage = (stageId: number) => {
+    setExpandedStages((prev) => ({
+      ...prev,
+      [stageId]: !prev[stageId],
+    }));
+  };
+
+  // Toggle Topic checkbox with optimistic update
   const handleToggleTopic = async (topicId: string, currentDone: boolean) => {
     if (!data) return;
-
     const newDone = !currentDone;
 
-    // Optimistic UI update
+    // Optimistic state update
     setData((prev) => {
-      if (!prev) return prev;
+      if (!prev) return null;
       return {
         ...prev,
         topicProgress: {
@@ -118,38 +156,28 @@ export default function RoadmapDetailPage() {
 
     try {
       const supabase = isSupabaseConfigured() ? createClient() : null;
-      await toggleTopicProgress(data.roadmap.id, topicId, newDone, supabase, user?.id);
-      toast.success(newDone ? "Topic marked complete!" : "Topic unchecked.");
-    } catch (err: any) {
-      // Rollback on error
-      setData((prev) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          topicProgress: {
-            ...prev.topicProgress,
-            [topicId]: {
-              ...prev.topicProgress[topicId],
-              done: currentDone,
-            },
-          },
-        };
-      });
-      toast.error(err.message || "Failed to update topic status.");
+      await toggleTopicProgress(roadmapId, topicId, newDone, supabase, user?.id);
+      toast.success(newDone ? "Topic marked mastered!" : "Topic marked in-progress");
+    } catch {
+      toast.error("Failed to update topic status.");
+      loadRoadmap();
     }
   };
 
-  // Autosave Notes with Debounce
+  // Debounced auto-save for study notes
   useEffect(() => {
     if (!selectedTopic || !data) return;
+    const currentSavedNote = data.topicProgress[selectedTopic.id]?.notes || "";
+    if (notesText === currentSavedNote) return;
 
     setNotesSaveStatus("saving");
     const timer = setTimeout(async () => {
       try {
         const supabase = isSupabaseConfigured() ? createClient() : null;
-        await saveTopicNotes(data.roadmap.id, selectedTopic.id, notesText, supabase, user?.id);
+        await saveTopicNotes(roadmapId, selectedTopic.id, notesText, supabase, user?.id);
+
         setData((prev) => {
-          if (!prev) return prev;
+          if (!prev) return null;
           return {
             ...prev,
             topicProgress: {
@@ -179,6 +207,66 @@ export default function RoadmapDetailPage() {
     });
     return calculateRoadmapProgress(data.roadmap.data, doneMap);
   }, [data]);
+
+  // Save Topic Revision Video
+  const handleSaveTopicVideo = async () => {
+    if (!selectedTopic || !data || !videoInputUrl.trim()) return;
+    const cleanUrl = videoInputUrl.trim();
+
+    try {
+      const supabase = isSupabaseConfigured() ? createClient() : null;
+      await saveTopicVideoProgress(roadmapId, selectedTopic.id, cleanUrl, supabase, user?.id);
+
+      setData((prev) => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          topicProgress: {
+            ...prev.topicProgress,
+            [selectedTopic.id]: {
+              ...prev.topicProgress[selectedTopic.id],
+              video_url: cleanUrl,
+            },
+          },
+        };
+      });
+
+      setIsVideoInputOpen(false);
+      toast.success("Revision video saved for this topic!");
+    } catch {
+      toast.error("Failed to save revision video.");
+    }
+  };
+
+  // Remove Topic Revision Video
+  const handleRemoveTopicVideo = async () => {
+    if (!selectedTopic || !data) return;
+
+    try {
+      const supabase = isSupabaseConfigured() ? createClient() : null;
+      await removeTopicVideoProgress(roadmapId, selectedTopic.id, supabase, user?.id);
+
+      setData((prev) => {
+        if (!prev) return null;
+        const progressCopy = { ...prev.topicProgress };
+        if (progressCopy[selectedTopic.id]) {
+          const topicCopy = { ...progressCopy[selectedTopic.id] };
+          delete topicCopy.video_url;
+          progressCopy[selectedTopic.id] = topicCopy;
+        }
+        return {
+          ...prev,
+          topicProgress: progressCopy,
+        };
+      });
+
+      setVideoInputUrl("");
+      setIsVideoInputOpen(false);
+      toast.info("Revision video removed.");
+    } catch {
+      toast.error("Failed to remove video.");
+    }
+  };
 
   // Copy Doubt Prompt
   const handleCopyDoubt = async () => {
@@ -244,206 +332,201 @@ export default function RoadmapDetailPage() {
     );
   }
 
+  // Active topic video url
+  const currentTopicVideo = selectedTopic
+    ? data.topicProgress[selectedTopic.id]?.video_url ||
+      getSavedTopicVideo(data.roadmap.id, selectedTopic.id)
+    : null;
+
   return (
     <div className="space-y-6">
       {/* Sticky Top Header */}
       <div className="sticky top-16 z-10 bg-bg/95 backdrop-blur-md border-b border-line py-3 -mx-4 px-4 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2 text-xs text-mute">
+        <div>
+          <div className="flex items-center gap-2 text-xs text-mute mb-1">
             <Link href="/roadmaps" className="hover:text-ink flex items-center gap-1">
-              <ArrowLeft className="w-3.5 h-3.5" /> Roadmaps
+              <ArrowLeft className="w-3 h-3" /> Roadmaps
             </Link>
             <span>/</span>
-            <span className="text-ink font-medium">{data.skill.name}</span>
+            <span>{data.skill.name}</span>
           </div>
-
           <div className="flex items-center gap-3">
             <h2 className="text-xl font-bold tracking-tight text-ink">
               {data.skill.name}
             </h2>
-            <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-primary/10 text-primary border border-primary/20 capitalize">
+            <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-primary/10 text-primary border border-primary/20">
               {data.skill.level}
-            </span>
-            <span className="text-xs text-mute font-mono">
-              {progress.doneCount} / {progress.totalCount} topics ({progress.percent}%)
             </span>
           </div>
         </div>
 
-        {/* Header Actions */}
-        <div className="flex items-center gap-2">
+        {/* Global Progress & Actions */}
+        <div className="flex items-center gap-4">
+          <div className="text-right">
+            <div className="flex items-center gap-2 justify-end">
+              <span className="text-xs text-mute font-mono">
+                {progress.doneCount} of {progress.totalCount} topics ({progress.percent}%)
+              </span>
+            </div>
+            <div className="w-36 h-2 rounded-full bg-surface border border-line overflow-hidden mt-1">
+              <div
+                className="h-full bg-primary transition-all duration-300"
+                style={{ width: `${progress.percent}%` }}
+              />
+            </div>
+          </div>
+
           <button
             type="button"
             onClick={handleDownloadJson}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-line bg-surface hover:bg-bg text-ink text-xs font-medium transition-colors"
-            title="Download full roadmap as JSON"
           >
             <Download className="w-3.5 h-3.5 text-mute" />
-            <span className="hidden sm:inline">Download JSON</span>
+            <span>Export JSON</span>
           </button>
-
-          <Link
-            href={`/plans/new?roadmap=${data.roadmap.id}`}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-md bg-primary hover:bg-primary-hover text-white text-xs font-semibold transition-colors shadow-sm"
-          >
-            <CalendarDays className="w-3.5 h-3.5" />
-            <span>Create 30-Day Plan</span>
-          </Link>
         </div>
       </div>
 
-      {/* Main 2-Column Layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Column: Stage Accordion (8 cols) */}
+      {/* 2-Column Responsive Layout: Stage Accordion (8 cols) + Sticky Study Dossier (4 cols) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* Left Column: Stage Accordions */}
         <div className="lg:col-span-8 space-y-4">
           {data.roadmap.data.stages.map((stage) => {
             const doneMap: Record<string, boolean> = {};
             stage.topics.forEach((t) => {
               doneMap[t.id] = data.topicProgress[t.id]?.done || false;
             });
-            const stageRes = calculateStageProgress(stage, doneMap);
-            const isExpanded = expandedStages[stage.id] ?? false;
-            const isCurrent = stage.id === progress.currentStageId;
-            const isLocked = stage.id > progress.currentStageId && !stageRes.isCompleted;
+
+            const stageInfo = calculateStageProgress(stage, doneMap);
+            const isExpanded = !!expandedStages[stage.id];
+            const isStageMastered = stageInfo.isCompleted;
+            const isStageInProgress = stage.id === progress.currentStageId && !isStageMastered;
+            const isStageLocked = stage.id > progress.currentStageId && stageInfo.doneCount === 0;
 
             return (
               <div
                 key={stage.id}
-                className={`rounded-lg bg-surface border transition-all overflow-hidden ${
-                  isCurrent
-                    ? "border-primary/40 shadow-card ring-1 ring-primary/20"
-                    : stageRes.isCompleted
-                    ? "border-emerald-500/30 shadow-card"
-                    : "border-line shadow-card"
-                }`}
+                className="rounded-lg bg-surface border border-line shadow-card overflow-hidden transition-all"
               >
-                {/* Stage Header */}
+                {/* Stage Accordion Header */}
                 <button
                   type="button"
-                  onClick={() =>
-                    setExpandedStages((prev) => ({
-                      ...prev,
-                      [stage.id]: !isExpanded,
-                    }))
-                  }
-                  className={`w-full p-4 text-left flex items-center justify-between transition-colors ${
-                    isCurrent
-                      ? "bg-primary-tint/40 dark:bg-primary-tint/10"
-                      : stageRes.isCompleted
-                      ? "bg-emerald-500/5"
-                      : "bg-surface hover:bg-bg/50"
-                  }`}
+                  onClick={() => toggleStage(stage.id)}
+                  className="w-full p-4 flex items-center justify-between text-left hover:bg-bg/40 transition-colors cursor-pointer"
                 >
-                  <div className="flex items-center gap-3 min-w-0">
+                  <div className="flex items-center gap-3">
                     <div
-                      className={`w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs shrink-0 ${
-                        stageRes.isCompleted
-                          ? "bg-emerald-500 text-white"
-                          : isCurrent
-                          ? "bg-primary text-white shadow-sm"
-                          : "bg-line text-mute"
+                      className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold font-mono transition-colors ${
+                        isStageMastered
+                          ? "bg-emerald-500/20 text-emerald-600 dark:text-emerald-400"
+                          : isStageInProgress
+                          ? "bg-primary text-white"
+                          : "bg-bg text-mute border border-line"
                       }`}
                     >
-                      {stageRes.isCompleted ? (
-                        <Check className="w-4 h-4 stroke-[3]" />
-                      ) : isLocked ? (
+                      {isStageMastered ? (
+                        <Check className="w-4 h-4 stroke-[2.5]" />
+                      ) : isStageLocked ? (
                         <Lock className="w-3.5 h-3.5" />
                       ) : (
                         stage.id
                       )}
                     </div>
 
-                    <div className="min-w-0">
+                    <div>
                       <div className="flex items-center gap-2">
-                        <h3 className="text-sm font-semibold text-ink truncate">
-                          Stage {stage.id}: {stage.title}
-                        </h3>
-                        {stageRes.isCompleted && (
-                          <span className="px-2 py-0.2 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-                            Mastered 100%
+                        <span className="text-[11px] font-semibold uppercase tracking-wider text-mute">
+                          Stage {stage.id}
+                        </span>
+                        {isStageMastered && (
+                          <span className="text-[10px] font-medium px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                            Mastered
                           </span>
                         )}
-                        {isCurrent && !stageRes.isCompleted && (
-                          <span className="px-2 py-0.2 rounded text-[10px] font-semibold bg-primary/10 text-primary">
-                            In Progress
+                        {isStageInProgress && (
+                          <span className="text-[10px] font-medium px-1.5 py-0.2 rounded bg-primary/10 text-primary">
+                            In-Progress
                           </span>
                         )}
                       </div>
-                      <p className="text-xs text-mute truncate mt-0.5">
-                        {stage.goal} • Est. {stage.est_weeks} weeks
-                      </p>
+                      <h3 className="text-sm font-semibold text-ink mt-0.5">
+                        {stage.title}
+                      </h3>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-3 shrink-0 ml-2">
-                    <span className="text-xs font-mono font-medium text-mute">
-                      {stageRes.doneCount}/{stageRes.totalCount}
+                  <div className="flex items-center gap-4">
+                    <span className="text-xs text-mute font-mono hidden sm:inline">
+                      {stageInfo.doneCount} / {stageInfo.totalCount} topics ({stageInfo.percent}%)
                     </span>
-                    {isExpanded ? (
-                      <ChevronDown className="w-4 h-4 text-mute" />
-                    ) : (
-                      <ChevronRight className="w-4 h-4 text-mute" />
-                    )}
+                    <ChevronDown
+                      className={`w-4 h-4 text-mute transition-transform duration-200 ${
+                        isExpanded ? "transform rotate-180" : ""
+                      }`}
+                    />
                   </div>
                 </button>
 
-                {/* Topics List (Expanded) */}
+                {/* Topics List when expanded */}
                 {isExpanded && (
-                  <div className="divide-y divide-line border-t border-line bg-surface/50">
+                  <div className="border-t border-line divide-y divide-line/60 bg-bg/20">
                     {stage.topics.map((topic) => {
                       const isDone = data.topicProgress[topic.id]?.done || false;
                       const isSelected = selectedTopic?.id === topic.id;
+                      const topicVideo =
+                        data.topicProgress[topic.id]?.video_url ||
+                        getSavedTopicVideo(data.roadmap.id, topic.id);
 
                       return (
                         <div
                           key={topic.id}
                           onClick={() => handleSelectTopic(topic)}
-                          className={`p-3.5 flex items-center justify-between gap-3 cursor-pointer transition-colors ${
+                          className={`p-3.5 sm:px-4 flex items-center justify-between gap-3 cursor-pointer transition-colors ${
                             isSelected
-                              ? "bg-primary-tint/30 dark:bg-primary-tint/15 border-l-2 border-l-primary"
-                              : "hover:bg-bg"
+                              ? "bg-primary-tint/30 dark:bg-primary-tint/10 border-l-2 border-l-primary"
+                              : "hover:bg-bg/60"
                           }`}
                         >
-                          {/* Checkbox & Topic Info */}
                           <div className="flex items-start gap-3 min-w-0">
-                            <button
-                              type="button"
-                              onClick={(e) => {
+                            <input
+                              type="checkbox"
+                              checked={isDone}
+                              onChange={(e) => {
                                 e.stopPropagation();
                                 handleToggleTopic(topic.id, isDone);
                               }}
-                              className={`w-5 h-5 rounded-md border flex items-center justify-center transition-all mt-0.5 shrink-0 ${
-                                isDone
-                                  ? "bg-emerald-500 border-emerald-500 text-white shadow-xs"
-                                  : "border-line bg-surface hover:border-primary"
-                              }`}
-                              title={isDone ? "Mark as not done" : "Mark as completed"}
-                            >
-                              {isDone && <Check className="w-3.5 h-3.5 stroke-[3]" />}
-                            </button>
+                              className="w-4 h-4 rounded text-primary accent-primary mt-1 cursor-pointer shrink-0"
+                            />
 
                             <div className="min-w-0">
                               <div className="flex items-center gap-2 flex-wrap">
-                                <span className={`text-xs font-medium ${isDone ? "line-through text-mute" : "text-ink"}`}>
-                                  {topic.id} {topic.title}
+                                <span className="font-mono text-[11px] font-medium text-mute">
+                                  {topic.id}
                                 </span>
-                                {topic.difficulty && (
+                                <span
+                                  className={`text-xs font-medium truncate ${
+                                    isDone ? "line-through text-mute" : "text-ink"
+                                  }`}
+                                >
+                                  {topic.title}
+                                </span>
+                                <span
+                                  className={`text-[10px] px-1.5 py-0.2 rounded capitalize ${
+                                    topic.difficulty === "easy"
+                                      ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                                      : topic.difficulty === "hard"
+                                      ? "bg-rose-500/10 text-rose-600 dark:text-rose-400"
+                                      : "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                                  }`}
+                                >
+                                  {topic.difficulty}
+                                </span>
+                                {topicVideo && (
                                   <span
-                                    className={`px-1.5 py-0.2 rounded text-[10px] capitalize font-medium ${
-                                      topic.difficulty === "easy"
-                                        ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                                        : topic.difficulty === "medium"
-                                        ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
-                                        : "bg-rose-500/10 text-rose-600 dark:text-rose-400"
-                                    }`}
+                                    className="p-0.5 text-red-500 inline-flex items-center"
+                                    title="Has saved YouTube revision video"
                                   >
-                                    {topic.difficulty}
-                                  </span>
-                                )}
-                                {data.topicProgress[topic.id]?.notes && (
-                                  <span className="text-[10px] text-mute flex items-center gap-0.5">
-                                    <NotebookPen className="w-3 h-3 text-primary" />
-                                    <span>Notes</span>
+                                    <Youtube className="w-3.5 h-3.5 fill-red-500" />
                                   </span>
                                 )}
                               </div>
@@ -524,6 +607,109 @@ export default function RoadmapDetailPage() {
                   )}
                 </div>
 
+                {/* Revision Video Section */}
+                <div className="rounded-md bg-bg border border-line p-3.5 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5 text-ink font-semibold text-xs">
+                      <Youtube className="w-4 h-4 text-red-600 fill-red-600" />
+                      <span>Revision Video</span>
+                    </div>
+                    <a
+                      href={getYouTubeSearchUrl(selectedTopic.title, data.skill.name)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-red-600 dark:text-red-400 hover:text-red-500 flex items-center gap-1 text-[11px] font-medium transition-colors"
+                      title="Search this topic on YouTube"
+                    >
+                      <span>Find on YouTube</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </div>
+
+                  {currentTopicVideo ? (
+                    <div className="space-y-2">
+                      {getYouTubeEmbedUrl(currentTopicVideo) ? (
+                        <div className="relative w-full aspect-video rounded-md overflow-hidden bg-black shadow-inner">
+                          <iframe
+                            src={getYouTubeEmbedUrl(currentTopicVideo)!}
+                            title={selectedTopic.title}
+                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                            allowFullScreen
+                            className="absolute inset-0 w-full h-full border-0"
+                          />
+                        </div>
+                      ) : (
+                        <div className="p-2.5 rounded bg-surface border border-line text-xs">
+                          <a
+                            href={currentTopicVideo}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-primary hover:underline break-all"
+                          >
+                            {currentTopicVideo}
+                          </a>
+                        </div>
+                      )}
+
+                      <div className="flex items-center justify-between text-[11px] pt-1">
+                        <button
+                          type="button"
+                          onClick={() => setIsVideoInputOpen(!isVideoInputOpen)}
+                          className="text-mute hover:text-ink underline cursor-pointer"
+                        >
+                          {isVideoInputOpen ? "Cancel Change" : "Change Video Link"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleRemoveTopicVideo}
+                          className="text-rose-500 hover:text-rose-400 flex items-center gap-1 cursor-pointer transition-colors"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          <span>Remove</span>
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <p className="text-[11px] text-mute leading-relaxed">
+                        Found the best video tutorial for this topic? Paste the link here to revise it anytime.
+                      </p>
+                      {!isVideoInputOpen && (
+                        <button
+                          type="button"
+                          onClick={() => setIsVideoInputOpen(true)}
+                          className="w-full py-1.5 px-3 rounded bg-surface hover:bg-bg border border-line text-xs font-medium text-ink flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                        >
+                          <Plus className="w-3 h-3" />
+                          <span>Paste YouTube Video Link</span>
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Inline Paste input */}
+                  {isVideoInputOpen && (
+                    <div className="pt-2 border-t border-line space-y-2">
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="url"
+                          value={videoInputUrl}
+                          onChange={(e) => setVideoInputUrl(e.target.value)}
+                          placeholder="Paste YouTube link (https://youtu.be/...)"
+                          className="flex-1 h-8 px-2.5 rounded bg-surface border border-line text-xs text-ink font-mono focus:outline-none focus:border-primary"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleSaveTopicVideo}
+                          className="px-3 h-8 rounded bg-primary hover:bg-primary-hover text-white text-xs font-medium shrink-0 transition-colors shadow-sm cursor-pointer"
+                        >
+                          Save
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 {/* Personal Study Notes */}
                 <div>
                   <div className="flex items-center justify-between mb-1">
@@ -534,7 +720,7 @@ export default function RoadmapDetailPage() {
                     value={notesText}
                     onChange={(e) => setNotesText(e.target.value)}
                     placeholder="Capture code snippets, key takeaways, or concepts to revisit..."
-                    className="w-full h-32 p-3 rounded-md bg-bg border border-line text-xs text-ink focus:outline-none focus:border-primary resize-none font-sans"
+                    className="w-full h-28 p-3 rounded-md bg-bg border border-line text-xs text-ink focus:outline-none focus:border-primary resize-none font-sans"
                   />
                 </div>
 
@@ -542,7 +728,7 @@ export default function RoadmapDetailPage() {
                 {selectedTopic.resources && selectedTopic.resources.length > 0 && (
                   <div>
                     <span className="text-[11px] text-mute font-medium block mb-1">
-                      Recommended Resources
+                      Recommended Free Resources
                     </span>
                     <div className="space-y-1">
                       {selectedTopic.resources.map((res, i) => (
@@ -571,10 +757,10 @@ export default function RoadmapDetailPage() {
                     <button
                       type="button"
                       onClick={handleCopyDoubt}
-                      className="text-[11px] text-primary hover:underline flex items-center gap-1 font-medium"
+                      className="text-[11px] text-primary hover:underline flex items-center gap-1 font-medium cursor-pointer"
                     >
                       <Copy className="w-3 h-3" />
-                      <span>{doubtCopied ? "Copied!" : "Copy"}</span>
+                      <span>{doubtCopied ? "Copied!" : "Copy Prompt"}</span>
                     </button>
                   </div>
                   <p className="text-[11px] text-mute leading-relaxed font-mono bg-surface p-2.5 rounded border border-line">
@@ -583,7 +769,9 @@ export default function RoadmapDetailPage() {
                 </div>
               </div>
             ) : (
-              <p className="text-xs text-mute">Select any topic row to view its study dossier.</p>
+              <p className="text-xs text-mute py-8 text-center">
+                Select any topic from the curriculum on the left to inspect resources, notes, revision videos, and AI prompts.
+              </p>
             )}
           </div>
         </div>

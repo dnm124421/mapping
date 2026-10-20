@@ -17,6 +17,10 @@ import {
   ChevronRight,
   MoreVertical,
   X,
+  Youtube,
+  Video,
+  ExternalLink,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/components/providers/AuthProvider";
@@ -27,10 +31,18 @@ import {
   moveTaskDate,
   addCustomTask,
   saveDailyScratchpad,
+  saveTaskVideoUrl,
+  removeTaskVideoUrl,
   PlanWithChunkDetails,
   PlanTaskItem,
 } from "@/lib/data/plans";
 import { buildDoubtPrompt, buildQuizPrompt } from "@/lib/prompts";
+import {
+  extractYouTubeId,
+  getYouTubeEmbedUrl,
+  getYouTubeSearchUrl,
+  getSavedTopicVideo,
+} from "@/lib/video";
 
 export default function TodaysToDoPage({
   params,
@@ -55,13 +67,17 @@ export default function TodaysToDoPage({
   const [scratchpadStatus, setScratchpadStatus] = useState("Saved");
   const scratchpadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Video state (inline paste & expanded player)
+  const [activeVideoInputTaskId, setActiveVideoInputTaskId] = useState<string | null>(null);
+  const [videoInputUrl, setVideoInputUrl] = useState("");
+  const [expandedVideoTaskId, setExpandedVideoTaskId] = useState<string | null>(null);
+
   const loadPlan = async () => {
     setLoading(true);
     const supabase = isSupabaseConfigured() ? createClient() : null;
     const data = await fetchPlanDetails(params.id, supabase, user?.id);
     setPlan(data);
     if (data && data.days && data.days.length > 0) {
-      // If today is within chunk days, default to today, else first day
       const dayMatchesToday = data.days.some((d) => d.date === todayStr);
       if (!dayMatchesToday) {
         setSelectedDate(data.days[0].date);
@@ -74,7 +90,7 @@ export default function TodaysToDoPage({
     loadPlan();
   }, [params.id, user]);
 
-  // Load scratchpad from local storage or supabase
+  // Load scratchpad
   useEffect(() => {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem(`scratchpad_${selectedDate}`) || "";
@@ -99,7 +115,6 @@ export default function TodaysToDoPage({
     const isDone = currentStatus === "done";
     const nextStatus = isDone ? "todo" : "done";
 
-    // Optimistic update
     setPlan((prev) => {
       if (!prev) return null;
       const updatedAll = prev.allTasks.map((t) =>
@@ -170,6 +185,91 @@ export default function TodaysToDoPage({
       loadPlan();
     } catch (err: any) {
       toast.error(`Failed to add task: ${err.message || "Unknown error"}`);
+    }
+  };
+
+  // Save YouTube Revision Video
+  const handleSaveVideo = async (task: PlanTaskItem) => {
+    if (!videoInputUrl.trim()) return;
+    const cleanUrl = videoInputUrl.trim();
+
+    try {
+      const supabase = isSupabaseConfigured() ? createClient() : null;
+      await saveTaskVideoUrl({
+        taskId: task.id,
+        videoUrl: cleanUrl,
+        roadmapRef: task.roadmap_ref,
+        roadmapId: plan?.roadmap_id,
+        supabase,
+        userId: user?.id,
+      });
+
+      // Update local state
+      setPlan((prev) => {
+        if (!prev) return null;
+        const updatedAll = prev.allTasks.map((t) =>
+          t.id === task.id ? { ...t, video_url: cleanUrl } : t
+        );
+        const updatedDays = prev.days.map((d) => ({
+          ...d,
+          tasks: d.tasks.map((t) =>
+            t.id === task.id ? { ...t, video_url: cleanUrl } : t
+          ),
+        }));
+        return { ...prev, allTasks: updatedAll, days: updatedDays };
+      });
+
+      setActiveVideoInputTaskId(null);
+      setVideoInputUrl("");
+      setExpandedVideoTaskId(task.id);
+      toast.success("YouTube revision video saved! You can watch it anytime.");
+    } catch {
+      toast.error("Failed to save revision video.");
+    }
+  };
+
+  // Remove YouTube Revision Video
+  const handleRemoveVideo = async (task: PlanTaskItem) => {
+    try {
+      const supabase = isSupabaseConfigured() ? createClient() : null;
+      await removeTaskVideoUrl({
+        taskId: task.id,
+        roadmapRef: task.roadmap_ref,
+        roadmapId: plan?.roadmap_id,
+        supabase,
+        userId: user?.id,
+      });
+
+      setPlan((prev) => {
+        if (!prev) return null;
+        const updatedAll = prev.allTasks.map((t) => {
+          if (t.id === task.id) {
+            const copy = { ...t };
+            delete copy.video_url;
+            return copy;
+          }
+          return t;
+        });
+        const updatedDays = prev.days.map((d) => ({
+          ...d,
+          tasks: d.tasks.map((t) => {
+            if (t.id === task.id) {
+              const copy = { ...t };
+              delete copy.video_url;
+              return copy;
+            }
+            return t;
+          }),
+        }));
+        return { ...prev, allTasks: updatedAll, days: updatedDays };
+      });
+
+      if (expandedVideoTaskId === task.id) {
+        setExpandedVideoTaskId(null);
+      }
+      toast.info("Revision video removed.");
+    } catch {
+      toast.error("Failed to remove video.");
     }
   };
 
@@ -390,109 +490,286 @@ export default function TodaysToDoPage({
             <div className="space-y-3">
               {scheduledTasks.map((task) => {
                 const isDone = task.status === "done";
+                // Check if task has a saved video or if one was saved for its roadmap topic
+                const topicSavedVideo = task.roadmap_ref
+                  ? getSavedTopicVideo(plan.roadmap_id, task.roadmap_ref)
+                  : null;
+                const effectiveVideoUrl = task.video_url || topicSavedVideo || null;
+                const isExpandedVideo = expandedVideoTaskId === task.id;
+                const isInputOpen = activeVideoInputTaskId === task.id;
+
                 return (
                   <div
                     key={task.id}
-                    className={`rounded-lg bg-surface border border-line p-4 shadow-card hover:shadow-card-hover transition-all flex items-start justify-between gap-3 ${
+                    className={`rounded-lg bg-surface border border-line p-4 shadow-card hover:shadow-card-hover transition-all flex flex-col gap-3 ${
                       isDone ? "opacity-75 bg-bg/50" : ""
                     }`}
                   >
-                    <div className="flex items-start gap-3 flex-1 min-w-0">
-                      <input
-                        type="checkbox"
-                        checked={isDone}
-                        onChange={() => handleToggleTask(task.id, task.status)}
-                        className="w-4 h-4 rounded text-primary accent-primary mt-1 cursor-pointer shrink-0"
-                      />
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-start gap-3 flex-1 min-w-0">
+                        <input
+                          type="checkbox"
+                          checked={isDone}
+                          onChange={() => handleToggleTask(task.id, task.status)}
+                          className="w-4 h-4 rounded text-primary accent-primary mt-1 cursor-pointer shrink-0"
+                        />
 
-                      <div className="space-y-1.5 flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span
-                            className={`px-2 py-0.5 rounded text-[10px] font-medium uppercase tracking-wide ${
-                              task.kind === "practice"
-                                ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                                : task.kind === "project"
-                                ? "bg-purple-500/10 text-purple-600 dark:text-purple-400"
-                                : "bg-primary/10 text-primary"
+                        <div className="space-y-1.5 flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span
+                              className={`px-2 py-0.5 rounded text-[10px] font-medium uppercase tracking-wide ${
+                                task.kind === "practice"
+                                  ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                                  : task.kind === "project"
+                                  ? "bg-purple-500/10 text-purple-600 dark:text-purple-400"
+                                  : "bg-primary/10 text-primary"
+                              }`}
+                            >
+                              {task.kind || "learn"}
+                            </span>
+                            <span className="text-xs text-mute font-mono">
+                              {task.est_minutes} mins
+                            </span>
+                            {task.roadmap_ref && (
+                              <span className="text-xs text-mute font-mono">
+                                • Ref {task.roadmap_ref}
+                              </span>
+                            )}
+                            {task.is_custom && (
+                              <span className="px-1.5 py-0.2 rounded text-[10px] bg-bg border border-line text-mute">
+                                Custom
+                              </span>
+                            )}
+                            {effectiveVideoUrl && (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20">
+                                <Youtube className="w-3 h-3 fill-red-500 text-red-500" />
+                                <span>Video Saved</span>
+                              </span>
+                            )}
+                          </div>
+
+                          <h4
+                            className={`text-sm font-medium ${
+                              isDone ? "line-through text-mute" : "text-ink"
                             }`}
                           >
-                            {task.kind || "learn"}
-                          </span>
-                          <span className="text-xs text-mute font-mono">
-                            {task.est_minutes} mins
-                          </span>
-                          {task.roadmap_ref && (
-                            <span className="text-xs text-mute font-mono">
-                              • Ref {task.roadmap_ref}
-                            </span>
+                            {task.title}
+                          </h4>
+
+                          {task.description && (
+                            <p className="text-xs text-ink2 leading-relaxed">
+                              {task.description}
+                            </p>
                           )}
-                          {task.is_custom && (
-                            <span className="px-1.5 py-0.2 rounded text-[10px] bg-bg border border-line text-mute">
-                              Custom
-                            </span>
+
+                          {/* Interactive Sub-checklist */}
+                          {task.checklist && task.checklist.length > 0 && (
+                            <div className="pt-1.5 space-y-1 border-t border-line/60">
+                              {task.checklist.map((item, idx) => (
+                                <div
+                                  key={idx}
+                                  className="flex items-center gap-2 text-xs text-ink2"
+                                >
+                                  <span className="w-1.5 h-1.5 rounded-full bg-line" />
+                                  <span>{typeof item === "string" ? item : item.text}</span>
+                                </div>
+                              ))}
+                            </div>
                           )}
-                        </div>
 
-                        <h4
-                          className={`text-sm font-medium ${
-                            isDone ? "line-through text-mute" : "text-ink"
-                          }`}
-                        >
-                          {task.title}
-                        </h4>
+                          {/* Action Toolbar: AI Assistance + YouTube Search + Revision Video */}
+                          <div className="pt-2 flex items-center gap-3 text-[11px] flex-wrap">
+                            {/* YouTube Search Button */}
+                            <a
+                              href={getYouTubeSearchUrl(task.title, plan.skill_name)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-red-600 dark:text-red-400 hover:text-red-500 flex items-center gap-1 font-medium transition-colors"
+                              title="Search this topic on YouTube to find tutorials"
+                            >
+                              <Youtube className="w-3.5 h-3.5 fill-red-600 text-red-600 dark:fill-red-400 dark:text-red-400" />
+                              <span>Search YouTube</span>
+                              <ExternalLink className="w-2.5 h-2.5 opacity-70" />
+                            </a>
 
-                        {task.description && (
-                          <p className="text-xs text-ink2 leading-relaxed">
-                            {task.description}
-                          </p>
-                        )}
+                            <span className="text-line">•</span>
 
-                        {/* Interactive Sub-checklist */}
-                        {task.checklist && task.checklist.length > 0 && (
-                          <div className="pt-1.5 space-y-1 border-t border-line/60">
-                            {task.checklist.map((item, idx) => (
-                              <div
-                                key={idx}
-                                className="flex items-center gap-2 text-xs text-ink2"
-                              >
-                                <span className="w-1.5 h-1.5 rounded-full bg-line" />
-                                <span>{typeof item === "string" ? item : item.text}</span>
+                            {/* Saved Video / Attach Video Button */}
+                            {effectiveVideoUrl ? (
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setExpandedVideoTaskId(
+                                      isExpandedVideo ? null : task.id
+                                    )
+                                  }
+                                  className="text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1 font-medium transition-colors cursor-pointer"
+                                >
+                                  <Video className="w-3.5 h-3.5" />
+                                  <span>{isExpandedVideo ? "Hide Video" : "Watch Revision Video"}</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setActiveVideoInputTaskId(isInputOpen ? null : task.id);
+                                    setVideoInputUrl(effectiveVideoUrl);
+                                  }}
+                                  className="text-mute hover:text-ink text-[10px] underline cursor-pointer"
+                                >
+                                  Change
+                                </button>
                               </div>
-                            ))}
-                          </div>
-                        )}
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActiveVideoInputTaskId(isInputOpen ? null : task.id);
+                                  setVideoInputUrl("");
+                                }}
+                                className="text-primary hover:underline flex items-center gap-1 font-medium transition-colors cursor-pointer"
+                              >
+                                <Plus className="w-3 h-3" />
+                                <span>Save YouTube Video</span>
+                              </button>
+                            )}
 
-                        {/* Quick AI Assistance buttons */}
-                        <div className="pt-2 flex items-center gap-2 text-[11px]">
+                            <span className="text-line">•</span>
+
+                            {/* Ask AI Doubt */}
+                            <button
+                              type="button"
+                              onClick={() => handleCopyDoubt(task)}
+                              className="text-mute hover:text-ink flex items-center gap-1 transition-colors cursor-pointer"
+                            >
+                              <HelpCircle className="w-3 h-3 text-primary" />
+                              <span>Ask AI Doubt</span>
+                            </button>
+
+                            <span className="text-line">•</span>
+
+                            {/* Quiz Me */}
+                            <button
+                              type="button"
+                              onClick={() => handleCopyQuiz(task)}
+                              className="text-mute hover:text-ink flex items-center gap-1 transition-colors cursor-pointer"
+                            >
+                              <Sparkles className="w-3 h-3 text-emerald-500" />
+                              <span>Quiz Me</span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Start Focus Button */}
+                      <Link
+                        href={`/focus/${task.id}`}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-primary/10 hover:bg-primary/20 text-primary text-xs font-medium transition-colors shrink-0"
+                      >
+                        <Play className="w-3 h-3 fill-primary" />
+                        <span>Start Focus</span>
+                      </Link>
+                    </div>
+
+                    {/* Inline Paste Box for YouTube URL */}
+                    {isInputOpen && (
+                      <div className="mt-1 p-3 rounded-md bg-bg border border-line space-y-2 text-xs animate-in fade-in duration-200">
+                        <div className="flex items-center justify-between">
+                          <span className="font-semibold text-ink flex items-center gap-1.5 text-[11px]">
+                            <Youtube className="w-3.5 h-3.5 text-red-500 fill-red-500" />
+                            <span>Paste Best YouTube Video Link for Revision</span>
+                          </span>
                           <button
                             type="button"
-                            onClick={() => handleCopyDoubt(task)}
-                            className="text-mute hover:text-ink flex items-center gap-1 transition-colors"
+                            onClick={() => setActiveVideoInputTaskId(null)}
+                            className="text-mute hover:text-ink"
                           >
-                            <HelpCircle className="w-3 h-3 text-primary" />
-                            <span>Ask AI Doubt</span>
+                            <X className="w-3.5 h-3.5" />
                           </button>
-                          <span className="text-line">•</span>
+                        </div>
+                        <p className="text-[11px] text-mute">
+                          Paste the link here. It will be available for quick revision on this day and in the Roadmap topic dossier!
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="url"
+                            value={videoInputUrl}
+                            onChange={(e) => setVideoInputUrl(e.target.value)}
+                            placeholder="e.g., https://www.youtube.com/watch?v=... or https://youtu.be/..."
+                            className="flex-1 h-8 px-2.5 rounded bg-surface border border-line text-xs text-ink focus:outline-none focus:border-primary font-mono"
+                          />
                           <button
                             type="button"
-                            onClick={() => handleCopyQuiz(task)}
-                            className="text-mute hover:text-ink flex items-center gap-1 transition-colors"
+                            onClick={() => handleSaveVideo(task)}
+                            className="px-3.5 h-8 rounded bg-primary hover:bg-primary-hover text-white text-xs font-medium transition-colors shrink-0 shadow-sm cursor-pointer"
                           >
-                            <Sparkles className="w-3 h-3 text-emerald-500" />
-                            <span>Quiz Me</span>
+                            Save Video
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setActiveVideoInputTaskId(null)}
+                            className="px-2.5 h-8 rounded border border-line hover:bg-surface text-ink text-xs transition-colors shrink-0 cursor-pointer"
+                          >
+                            Cancel
                           </button>
                         </div>
                       </div>
-                    </div>
+                    )}
 
-                    {/* Start Focus Button */}
-                    <Link
-                      href={`/focus/${task.id}`}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-primary/10 hover:bg-primary/20 text-primary text-xs font-medium transition-colors shrink-0"
-                    >
-                      <Play className="w-3 h-3 fill-primary" />
-                      <span>Start Focus</span>
-                    </Link>
+                    {/* Expandable Embedded YouTube Revision Video Player */}
+                    {effectiveVideoUrl && isExpandedVideo && (
+                      <div className="mt-2 rounded-md overflow-hidden border border-line bg-bg p-3.5 space-y-2.5 animate-in fade-in duration-200">
+                        <div className="flex items-center justify-between text-xs">
+                          <div className="flex items-center gap-2">
+                            <Youtube className="w-4 h-4 text-red-600 fill-red-600" />
+                            <span className="font-semibold text-ink">Revision Video</span>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <a
+                              href={effectiveVideoUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-mute hover:text-primary flex items-center gap-1 text-[11px] transition-colors"
+                            >
+                              <ExternalLink className="w-3 h-3" />
+                              <span>Watch on YouTube</span>
+                            </a>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveVideo(task)}
+                              className="text-rose-500 hover:text-rose-400 text-[11px] flex items-center gap-1 transition-colors cursor-pointer"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              <span>Remove</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {getYouTubeEmbedUrl(effectiveVideoUrl) ? (
+                          <div className="relative w-full aspect-video rounded-md overflow-hidden bg-black shadow-inner">
+                            <iframe
+                              src={getYouTubeEmbedUrl(effectiveVideoUrl)!}
+                              title={task.title}
+                              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                              allowFullScreen
+                              className="absolute inset-0 w-full h-full border-0"
+                            />
+                          </div>
+                        ) : (
+                          <div className="p-3 bg-surface rounded text-xs text-ink flex items-center justify-between">
+                            <span className="truncate">{effectiveVideoUrl}</span>
+                            <a
+                              href={effectiveVideoUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-primary hover:underline font-medium shrink-0 ml-2"
+                            >
+                              Open Link
+                            </a>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}

@@ -20,6 +20,7 @@ export interface PlanTaskItem {
   notes?: string;
   position: number;
   is_custom: boolean;
+  video_url?: string;
 }
 
 export interface PlanDayItem {
@@ -873,5 +874,166 @@ export async function logFocusSession({
     console.warn("Could not log focus session to supabase:", err);
   }
 }
+
+/**
+ * Saves a revision YouTube video URL to a task and syncs it with the roadmap topic
+ */
+export async function saveTaskVideoUrl({
+  taskId,
+  videoUrl,
+  roadmapRef,
+  roadmapId,
+  supabase,
+  userId,
+}: {
+  taskId: string;
+  videoUrl: string;
+  roadmapRef?: string;
+  roadmapId?: string;
+  supabase?: SupabaseClient | null;
+  userId?: string;
+}): Promise<void> {
+  const cleanUrl = videoUrl.trim();
+
+  // Local sync
+  if (typeof window !== "undefined") {
+    // 1. Update in local plans
+    const local = getLocalPlans();
+    for (const p of local) {
+      for (const t of p.allTasks) {
+        if (t.id === taskId) {
+          t.video_url = cleanUrl;
+        }
+      }
+      for (const d of p.days) {
+        for (const t of d.tasks) {
+          if (t.id === taskId) {
+            t.video_url = cleanUrl;
+          }
+        }
+      }
+    }
+    saveLocalPlans(local);
+
+    // 2. Sync to topic videos store and roadmaps
+    if (roadmapRef) {
+      try {
+        const rawVideos = localStorage.getItem("roadmap_planner_topic_videos");
+        const map = rawVideos ? JSON.parse(rawVideos) : {};
+        map[roadmapRef] = cleanUrl;
+        if (roadmapId) {
+          map[`${roadmapId}_${roadmapRef}`] = cleanUrl;
+        }
+        localStorage.setItem("roadmap_planner_topic_videos", JSON.stringify(map));
+
+        // Also update local roadmaps store
+        const rawRoadmaps = localStorage.getItem("roadmap_planner_skills_roadmaps");
+        if (rawRoadmaps) {
+          const roadmaps = JSON.parse(rawRoadmaps);
+          for (const item of roadmaps) {
+            if (item.roadmap?.id === roadmapId || roadmapId === "sample-1") {
+              if (!item.topicProgress) item.topicProgress = {};
+              if (!item.topicProgress[roadmapRef]) {
+                item.topicProgress[roadmapRef] = { done: false, video_url: cleanUrl };
+              } else {
+                item.topicProgress[roadmapRef].video_url = cleanUrl;
+              }
+            }
+          }
+          localStorage.setItem("roadmap_planner_skills_roadmaps", JSON.stringify(roadmaps));
+        }
+      } catch {}
+    }
+  }
+
+  // Supabase sync
+  if (supabase && userId) {
+    try {
+      await supabase
+        .from("tasks")
+        .update({ notes: cleanUrl })
+        .eq("id", taskId)
+        .eq("user_id", userId);
+
+      if (roadmapId && roadmapRef) {
+        await supabase.from("topic_progress").upsert(
+          {
+            user_id: userId,
+            roadmap_id: roadmapId,
+            topic_id: roadmapRef,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "roadmap_id,topic_id" }
+        );
+      }
+    } catch (err) {
+      console.warn("Could not sync task video url to Supabase:", err);
+    }
+  }
+}
+
+/**
+ * Removes saved revision video URL from a task and synced topic
+ */
+export async function removeTaskVideoUrl({
+  taskId,
+  roadmapRef,
+  roadmapId,
+  supabase,
+  userId,
+}: {
+  taskId: string;
+  roadmapRef?: string;
+  roadmapId?: string;
+  supabase?: SupabaseClient | null;
+  userId?: string;
+}): Promise<void> {
+  if (typeof window !== "undefined") {
+    const local = getLocalPlans();
+    for (const p of local) {
+      for (const t of p.allTasks) {
+        if (t.id === taskId) {
+          delete t.video_url;
+        }
+      }
+      for (const d of p.days) {
+        for (const t of d.tasks) {
+          if (t.id === taskId) {
+            delete t.video_url;
+          }
+        }
+      }
+    }
+    saveLocalPlans(local);
+
+    if (roadmapRef) {
+      try {
+        const rawVideos = localStorage.getItem("roadmap_planner_topic_videos");
+        if (rawVideos) {
+          const map = JSON.parse(rawVideos);
+          delete map[roadmapRef];
+          if (roadmapId) {
+            delete map[`${roadmapId}_${roadmapRef}`];
+          }
+          localStorage.setItem("roadmap_planner_topic_videos", JSON.stringify(map));
+        }
+
+        const rawRoadmaps = localStorage.getItem("roadmap_planner_skills_roadmaps");
+        if (rawRoadmaps) {
+          const roadmaps = JSON.parse(rawRoadmaps);
+          for (const item of roadmaps) {
+            if (item.roadmap?.id === roadmapId || roadmapId === "sample-1") {
+              if (item.topicProgress && item.topicProgress[roadmapRef]) {
+                delete item.topicProgress[roadmapRef].video_url;
+              }
+            }
+          }
+          localStorage.setItem("roadmap_planner_skills_roadmaps", JSON.stringify(roadmaps));
+        }
+      } catch {}
+    }
+  }
+}
+
 
 
